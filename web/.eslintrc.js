@@ -14,5 +14,6 @@ module.exports = {
     'no-await-in-loop': 'off',
     // Removed 'ForOfStatement'
     'no-restricted-syntax': ['error', 'ForInStatement', 'LabeledStatement', 'WithStatement'],
+    'no-console': 'off',
   },
 };
