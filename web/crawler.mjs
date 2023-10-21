@@ -73,29 +73,82 @@ async function checkFieldType(formLocator, fieldLocator) {
 }
 
 /**
- * Estimate the reward of clicking an element
+ * Attributes of an element (locator)
+ * @typedef {Object} ElementAttributes
+ * @property {string} id
+ * @property {string} tagName
+ * @property {string} textContent
+ * @property {number} width
+ * @property {number} height
+ */
+
+/**
+ * Get an element's attributes
  *
  * @param {import('playwright').Locator} locator
- * @returns {Promise<number>}
+ * @returns {Promise<ElementAttributes>}
  */
-async function estimateClickReward(locator) {
-  const textContent = await locator.textContent();
+async function getElementAttributes(locator) {
+  const attributes = await locator.evaluate((node) => ({
+    id: node.id,
+    tagName: node.tagName,
+    textContent: node.textContent,
+  }));
 
-  if (textContent.search(/\b(sign|create|forgot|reset|register|new|log|setting)s?\b/gi)) {
-    return 500;
+  const boundingBox = await locator.boundingBox();
+
+  if (boundingBox !== null) {
+    attributes.width = boundingBox.width;
+    attributes.height = boundingBox.height;
+  } else {
+    attributes.width = 0;
+    attributes.height = 0;
   }
 
-  return 0;
+  return attributes;
 }
 
 /**
- * Sleep :)
+ * Estimate the reward of clicking an element
  *
- * @param {number} ms
- * @returns {Promise<any>}
+ * @param {ElementAttributes} attributes
+ * @returns {number}
  */
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function estimateClickReward(attributes) {
+  // Not likely clickable if too small
+  if (attributes.width <= 16 || attributes.height <= 16) {
+    return 0;
+  }
+
+  // TODO: In the future, a text classifier can be used.
+  const text = attributes.textContent;
+
+  if (text.search(/\b(sign|create|forgot|reset|register|new|log|setting)s?\b/gi) >= 0) {
+    return 500;
+  }
+
+  return 1;
+}
+
+/**
+ * Locate the element that match the given attributes
+ *
+ * @param {import('playwright').Page} page
+ * @param {ElementAttributes} matchingAttributes
+ * @returns {import('playwright').Locator}
+ */
+async function locateElement(page, matchingAttributes) {
+  if (matchingAttributes.id !== '') {
+    const locator = page.locator(`#${matchingAttributes.id}`);
+    if ((await locator.count()) > 0) return locator.first();
+  }
+
+  for (const element of await page.locator(matchingAttributes.tagName).all()) {
+    const attr = await getElementAttributes(element);
+    if (matchingAttributes.textContent === attr.textContent) return element;
+  }
+
+  return null;
 }
 
 (async () => {
@@ -139,21 +192,39 @@ function sleep(ms) {
     console.log('Current job: ', job);
 
     await page.goto(job.url, { waitUntil: 'networkidle' });
+    let actionsFinished = true;
 
     for (const actionDesc of job.actions) {
       // Do the actions
-      const { _: action, ...elementDesc } = actionDesc;
 
-      console.log('Action', action);
-      console.log('Element:', elementDesc);
+      /** @type {string} */
+      const action = actionDesc._;
+      /** @type {ElementAttributes} */
+      const attr = actionDesc.attributes;
+
+      console.log('Action:', action);
+      console.log('Element:', attr);
+
+      const element = await locateElement(page, attr);
+
+      if (element === null) {
+        actionsFinished = false;
+        break;
+      }
 
       if (action === 'click') {
-        await page.getByRole('button')
-          .or(page.getByRole('link'))
-          .filter(elementDesc)
-          .click();
+        await element.click();
+      } else {
+        throw new Error(`Unsupported action: ${action}`);
       }
     }
+
+    if (!actionsFinished) {
+      console.warn('Job failed due to unfinished actions.');
+      continue;
+    }
+
+    console.log('Checking forms...');
 
     // Search the webpage for forms
     for (const form of await page.locator('form').all()) {
@@ -176,33 +247,32 @@ function sleep(ms) {
     for (const element of await locator.all()) {
       await element.scrollIntoViewIfNeeded();
 
-      const clickReward = await estimateClickReward(element);
-      const newActions = job.actions.slice();
+      const attributes = await getElementAttributes(element);
+      const clickReward = estimateClickReward(attributes);
 
-      newActions.push({
-        _: 'click',
-        hasText: await element.textContent(),
-      });
+      if (clickReward > 0) {
+        const newActions = job.actions.slice();
 
-      const newJobDesc = {
-        priority: clickReward,
-        ts: new Date().getTime(),
-        actions: newActions,
-        url: job.url,
-      };
+        newActions.push({
+          _: 'click',
+          attributes,
+        });
 
-      jobQueue.push(newJobDesc);
+        const newJobDesc = {
+          priority: clickReward,
+          ts: new Date().getTime(),
+          actions: newActions,
+          url: job.url,
+        };
 
-      //console.log('New job: ', newJobDesc);
+        jobQueue.push(newJobDesc);
+      }
     }
 
-    sleep(2000); // For now, avoid running too fast
+    await page.waitForTimeout(2000); // For now, avoid running too fast
   }
 
   // Log file
   // root/<URL>/<step-hash>/html
-
-
-
   await browser.close();
 })();

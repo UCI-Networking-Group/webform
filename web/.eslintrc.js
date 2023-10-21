@@ -15,5 +15,6 @@ module.exports = {
     // Removed 'ForOfStatement'
     'no-restricted-syntax': ['error', 'ForInStatement', 'LabeledStatement', 'WithStatement'],
     'no-console': 'off',
+    'no-continue': 'off',
   },
 };
