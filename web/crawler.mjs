@@ -135,28 +135,29 @@ function estimateClickReward(attributes) {
  *
  * @param {import('playwright').Page} page
  * @param {ElementAttributes} matchingAttributes
- * @returns {import('playwright').Locator}
+ * @returns {Promise<import('playwright').Locator|null>}
  */
 async function locateElement(page, matchingAttributes) {
-  if (matchingAttributes.id !== '') {
-    const locator = page.locator(`#${matchingAttributes.id}`);
+  const id = matchingAttributes.id;
+
+  if (id.match(/^[-A-Za-z0-9_]+$/) !== null) {
+    const locator = page.locator(`#${id}`);
     if ((await locator.count()) > 0) return locator.first();
   }
 
-  for (const element of await page.locator(matchingAttributes.tagName).all()) {
-    const attr = await getElementAttributes(element);
-    if (matchingAttributes.textContent === attr.textContent) return element;
+  const text = matchingAttributes.textContent;
+
+  if (text !== '') {
+    for (const element of await page.locator(matchingAttributes.tagName).all()) {
+      const attr = await getElementAttributes(element);
+      if (text === attr.textContent) return element;
+    }
   }
 
   return null;
 }
 
 (async () => {
-  // TODO:
-  //   - click buttons / links to discover forms
-  //   - detect popup dialogs
-  //   - discover privacy policy links
-
   const landingURLs = process.argv.slice(2);
 
   const jobQueue = new Heap((job1, job2) => {
@@ -169,7 +170,7 @@ async function locateElement(page, matchingAttributes) {
     jobQueue.push({
       priority: 1000,
       ts: new Date().getTime(),
-      actions: [],
+      steps: [],
       url,
     });
   }
@@ -179,28 +180,30 @@ async function locateElement(page, matchingAttributes) {
   const page = await browser.newPage();
 
   // Enable ad blocker to reduce noise
-  PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then((blocker) => {
+  await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then((blocker) => {
     blocker.enableBlockingInPage(page);
   });
 
   // Stealth plugin - not sure if it actually helps but why not
   chromium.use(StealthPlugin());
 
+  const flagAttributeName = "data-rr" + (new Date()).getTime();
+
   // Main loop
   while (jobQueue.size > 0) {
     const job = jobQueue.pop();
-    console.log('Current job: ', job);
+    console.log('Current job: ', JSON.stringify(job, null, 2));
 
     await page.goto(job.url, { waitUntil: 'networkidle' });
-    let actionsFinished = true;
+    let finishedAllSteps = true;
 
-    for (const actionDesc of job.actions) {
-      // Do the actions
+    for (const stepInfo of job.steps) {
+      // Do the steps
 
       /** @type {string} */
-      const action = actionDesc._;
+      const action = stepInfo.action;
       /** @type {ElementAttributes} */
-      const attr = actionDesc.attributes;
+      const attr = stepInfo.attributes;
 
       console.log('Action:', action);
       console.log('Element:', attr);
@@ -208,19 +211,26 @@ async function locateElement(page, matchingAttributes) {
       const element = await locateElement(page, attr);
 
       if (element === null) {
-        actionsFinished = false;
+        finishedAllSteps = false;
         break;
       }
+
+      page.getByRole('button').or(page.getByRole('link'))
+        .evaluateAll((el, attrName) => el.forEach((e) => e.setAttribute(attrName, '')), flagAttributeName);
 
       if (action === 'click') {
         await element.click();
       } else {
         throw new Error(`Unsupported action: ${action}`);
       }
+
+      // Wait for possible navigation
+      await page.waitForTimeout(1000);
+      await page.waitForLoadState('networkidle');
     }
 
-    if (!actionsFinished) {
-      console.warn('Job failed due to unfinished actions.');
+    if (!finishedAllSteps) {
+      console.warn('Job failed due to unfinished steps.');
       continue;
     }
 
@@ -250,29 +260,35 @@ async function locateElement(page, matchingAttributes) {
       const attributes = await getElementAttributes(element);
       const clickReward = estimateClickReward(attributes);
 
-      if (clickReward > 0) {
-        const newActions = job.actions.slice();
+      if (await element.evaluate((e, attrName) => e.hasAttribute(attrName), flagAttributeName)) {
+        // Skip because the element has been tried
+        continue;
+      }
 
-        newActions.push({
-          _: 'click',
+      if (clickReward > 0) {
+        const newSteps = job.steps.slice();
+
+        newSteps.push({
+          action: 'click',
           attributes,
         });
 
         const newJobDesc = {
           priority: clickReward,
           ts: new Date().getTime(),
-          actions: newActions,
+          steps: newSteps,
           url: job.url,
         };
+
+        console.log('Enqueue new job:', JSON.stringify(newJobDesc, null, 2));
 
         jobQueue.push(newJobDesc);
       }
     }
 
+    console.log('Job queue size:', jobQueue.size);
     await page.waitForTimeout(2000); // For now, avoid running too fast
   }
 
-  // Log file
-  // root/<URL>/<step-hash>/html
   await browser.close();
 })();
