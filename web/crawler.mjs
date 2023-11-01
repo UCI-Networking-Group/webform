@@ -23,7 +23,6 @@ async function checkFormType(locator) {
     }
   }
 
-  return 'UNKNOWN';
 }
 
 /**
@@ -175,17 +174,22 @@ async function locateElement(page, matchingAttributes) {
     });
   }
 
+  // Stealth plugin - not sure if it actually helps but why not
+  chromium.use(StealthPlugin());
+
   // Initialize the browser
   const browser = await chromium.launch();
+  const context = await browser.newContext({serviceWorkers: "block"});
   const page = await browser.newPage();
+
+  page.on('domcontentloaded', (page) => {
+    console.log("domcontentloaded:", page.url());
+  });
 
   // Enable ad blocker to reduce noise
   await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then((blocker) => {
     blocker.enableBlockingInPage(page);
   });
-
-  // Stealth plugin - not sure if it actually helps but why not
-  chromium.use(StealthPlugin());
 
   const flagAttributeName = "data-rr" + (new Date()).getTime();
 
@@ -200,12 +204,9 @@ async function locateElement(page, matchingAttributes) {
     for (const stepInfo of job.steps) {
       // Do the steps
 
-      /** @type {string} */
-      const action = stepInfo.action;
       /** @type {ElementAttributes} */
       const attr = stepInfo.attributes;
 
-      console.log('Action:', action);
       console.log('Element:', attr);
 
       const element = await locateElement(page, attr);
@@ -218,11 +219,7 @@ async function locateElement(page, matchingAttributes) {
       page.getByRole('button').or(page.getByRole('link'))
         .evaluateAll((el, attrName) => el.forEach((e) => e.setAttribute(attrName, '')), flagAttributeName);
 
-      if (action === 'click') {
-        await element.click();
-      } else {
-        throw new Error(`Unsupported action: ${action}`);
-      }
+      await element.click();
 
       // Wait for possible navigation
       await page.waitForTimeout(1000);
@@ -269,8 +266,8 @@ async function locateElement(page, matchingAttributes) {
         const newSteps = job.steps.slice();
 
         newSteps.push({
-          action: 'click',
           attributes,
+          navigation: null,
         });
 
         const newJobDesc = {
