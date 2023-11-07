@@ -42,10 +42,12 @@ async function checkFieldType(formLocator, fieldLocator) {
   const placeholder = await fieldLocator.evaluate((node) => node.placeholder);
   const fieldId = await fieldLocator.evaluate((node) => node.id);
   const fieldName = await fieldLocator.evaluate((node) => node.name);
+  const ariaLabel = await fieldLocator.evaluate((node) => node.getAttribute('aria-label'));
   const labelElement = formLocator.locator(`label[for="${fieldId}"]`);
 
   if (placeholder) testStrings.push(placeholder);
   if (fieldName) testStrings.push(fieldName.replaceAll('_', ' '));
+  if (ariaLabel) testStrings.push(ariaLabel);
 
   if (await labelElement.count() > 0) {
     const labelText = await labelElement.textContent();
@@ -57,14 +59,22 @@ async function checkFieldType(formLocator, fieldLocator) {
   for (const s of testStrings) {
     if (s.search(/\be-?mail\b/gi) >= 0) {
       return 'EMAIL';
+    } if (s.search(/\b(mobile|(tele)?phone)\s*number\b/gi) >= 0) {
+      return 'PHONE_NUMBER';
     } if (s.search(/\bpassword\b/gi) >= 0) {
       return 'PASSWORD';
     } if (s.search(/\b(first|last|full|real)\s*name\b/gi) >= 0) {
       return 'PERSON_NAME';
     } if (s.search(/\b(sex|gender)\b/gi) >= 0) {
       return 'GENDER';
-    } if (s.search(/\bbirth\s*day\b/gi) >= 0) {
+    } if (s.search(/\b(birth\s*day|date\s+of\s+birth)\b/gi) >= 0) {
       return 'BIRTHDAY';
+    } if (s.search(/\baddress\s+line\b/gi) >= 0) {
+      return 'PHYSICAL_ADDRESS';
+    } if (s.search(/\bzip\s*code\b/gi) >= 0) {
+      return 'ZIP_CODE';
+    } if (s.search(/\buser\s*(name|id)\b/gi) >= 0) {
+      return 'USERNAME';
     }
   }
 
@@ -122,7 +132,7 @@ function estimateClickReward(attributes) {
   // TODO: In the future, a text classifier can be used.
   const text = attributes.textContent;
 
-  if (text.search(/\b(sign|create|forgot|reset|register|new|log|setting)s?\b/gi) >= 0) {
+  if (text.search(/\b(sign|create|forgot|reset|register|new|log|setting|join|subscribe)s?\b/gi) >= 0) {
     return 500;
   }
 
@@ -156,7 +166,74 @@ async function locateElement(page, matchingAttributes) {
   return null;
 }
 
+class PageStateError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = this.constructor.name;
+  }
+}
+
+async function recoverPageState(page, url, steps) {
+  const landingUrl = new URL(url);
+  await page.goto(url, { waitUntil: 'networkidle' });
+
+  const history = [url];
+  const oldAttributeMark = "data-rr" + (new Date()).getTime();
+
+  let hasNavigated = false;
+  const navigationHandler = (data) => { hasNavigated = true; };
+  page.on("domcontentloaded", navigationHandler)
+
+  for (const stepInfo of steps) {
+    hasNavigated = false;
+
+    /** @type {ElementAttributes} */
+    const attr = stepInfo.attributes;
+
+    console.log('Element:', attr);
+
+    const element = await locateElement(page, attr);
+
+    if (element === null) {
+      throw new PageStateError('Cannot find specified element');
+    }
+
+    page.getByRole('button').or(page.getByRole('link'))
+      .evaluateAll((el, attrName) => el.forEach((e) => e.setAttribute(attrName, '')), oldAttributeMark);
+
+    await element.click();
+
+    // Wait for possible navigation
+    await page.waitForTimeout(1000);
+    await page.waitForLoadState('networkidle');
+
+    // Check navigation loop
+    if (hasNavigated) {
+      const currentUrl = new URL(page.url());
+
+      for (let i = 0; i < history.length; i++) {
+        if (history[i] !== null) {
+          const previousUrl = new URL(history[i]);
+
+          if (currentUrl.pathname == previousUrl.pathname) {
+            throw new PageStateError('Navigated to a previously visited URL');
+          }
+        }
+      }
+    }
+
+    history.push(hasNavigated ? page.url() : null);
+  }
+
+  page.off("domcontentloaded", navigationHandler);
+
+  console.log('Successfully recovered page state. URL:', page.url());
+
+  return oldAttributeMark;
+}
+
 (async () => {
+  const maxJobCount = 100;
   const landingURLs = process.argv.slice(2);
 
   const jobQueue = new Heap((job1, job2) => {
@@ -179,64 +256,51 @@ async function locateElement(page, matchingAttributes) {
 
   // Initialize the browser
   const browser = await chromium.launch();
-  const context = await browser.newContext({serviceWorkers: "block"});
-  const page = await browser.newPage();
-
-  page.on('domcontentloaded', (page) => {
-    console.log("domcontentloaded:", page.url());
-  });
-
-  // Enable ad blocker to reduce noise
-  await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then((blocker) => {
-    blocker.enableBlockingInPage(page);
-  });
-
-  const flagAttributeName = "data-rr" + (new Date()).getTime();
+  let jobCount = 0;
 
   // Main loop
-  while (jobQueue.size > 0) {
+  while (jobQueue.size > 0 && jobCount < maxJobCount) {
+    const context = await browser.newContext({
+      locale: "en-US",
+      timezoneId: "America/Los_Angeles",
+      serviceWorkers: "block",
+    });
+    context.setDefaultTimeout(10000);
+    const page = await context.newPage();
+
+    // Enable ad blocker to reduce noise
+    await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then((blocker) => {
+      blocker.enableBlockingInPage(page);
+    });
+
+    jobCount++;
+
     const job = jobQueue.pop();
     console.log('Current job: ', JSON.stringify(job, null, 2));
 
-    await page.goto(job.url, { waitUntil: 'networkidle' });
-    let finishedAllSteps = true;
+    let oldAttributeMark = null;
 
-    for (const stepInfo of job.steps) {
-      // Do the steps
-
-      /** @type {ElementAttributes} */
-      const attr = stepInfo.attributes;
-
-      console.log('Element:', attr);
-
-      const element = await locateElement(page, attr);
-
-      if (element === null) {
-        finishedAllSteps = false;
-        break;
+    try {
+      oldAttributeMark = await recoverPageState(page, job.url, job.steps);
+    } catch (e) {
+      if (e.name === 'PageStateError' || e.name === 'TimeoutError') {
+        console.log('Failed to recover page state:', e.message);
+        continue;
+      } else {
+        throw e;
       }
-
-      page.getByRole('button').or(page.getByRole('link'))
-        .evaluateAll((el, attrName) => el.forEach((e) => e.setAttribute(attrName, '')), flagAttributeName);
-
-      await element.click();
-
-      // Wait for possible navigation
-      await page.waitForTimeout(1000);
-      await page.waitForLoadState('networkidle');
-    }
-
-    if (!finishedAllSteps) {
-      console.warn('Job failed due to unfinished steps.');
-      continue;
     }
 
     console.log('Checking forms...');
 
     // Search the webpage for forms
     for (const form of await page.locator('form').all()) {
-      await form.scrollIntoViewIfNeeded();
-
+      try {
+        await form.scrollIntoViewIfNeeded();
+      } catch (e) {
+        console.warn(e);
+        continue;
+      }
       const formType = await checkFormType(form);
 
       console.log(`FORM TYPE: ${formType}`);
@@ -252,12 +316,17 @@ async function locateElement(page, matchingAttributes) {
     // Identify possible next steps
     const locator = page.getByRole('button').or(page.getByRole('link'));
     for (const element of await locator.all()) {
-      await element.scrollIntoViewIfNeeded();
+      try {
+        await element.scrollIntoViewIfNeeded();
+      } catch (e) {
+        console.warn(e);
+        continue;
+      }
 
       const attributes = await getElementAttributes(element);
       const clickReward = estimateClickReward(attributes);
 
-      if (await element.evaluate((e, attrName) => e.hasAttribute(attrName), flagAttributeName)) {
+      if (await element.evaluate((e, attrName) => e.hasAttribute(attrName), oldAttributeMark)) {
         // Skip because the element has been tried
         continue;
       }
@@ -277,14 +346,17 @@ async function locateElement(page, matchingAttributes) {
           url: job.url,
         };
 
-        console.log('Enqueue new job:', JSON.stringify(newJobDesc, null, 2));
+        // console.log('Enqueue new job:', JSON.stringify(newJobDesc, null, 2));
 
         jobQueue.push(newJobDesc);
       }
     }
 
     console.log('Job queue size:', jobQueue.size);
+
     await page.waitForTimeout(2000); // For now, avoid running too fast
+    await page.close();
+    await context.close();
   }
 
   await browser.close();
