@@ -4,8 +4,21 @@ import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
 import process from 'node:process';
 import mnemonist from 'mnemonist';
 import { Locator, Page } from 'playwright';
+import { parseDomain, ParseResultType } from "parse-domain";
 
 const { Heap } = mnemonist;
+
+class URLPlus extends URL {
+  get effectiveDomain(): string {
+    const parsed = parseDomain(this.hostname);
+
+    if (parsed.type === ParseResultType.Listed) {
+      return parsed.domain + "." + parsed.topLevelDomains.join(".");
+    } else {
+      return this.hostname;
+    }
+  }
+}
 
 /**
  * Guess the type of a form
@@ -161,7 +174,7 @@ class PageStateError extends Error {
 }
 
 async function recoverPageState(page: Page, url: string, steps: ElementAttributes[]) {
-  const landingUrl = new URL(url);
+  const landingUrl = new URLPlus(url);
   await page.goto(url, { waitUntil: 'networkidle' });
 
   const history: (string|null)[] = [url];
@@ -192,9 +205,13 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
 
     // Check navigation loop
     if (hasNavigated) {
-      const currentUrl = new URL(page.url());
+      const currentUrl = new URLPlus(page.url());
 
-      history.flatMap((s) => s ? [new URL(s)] : []).forEach((previousUrl) => {
+      if (currentUrl.effectiveDomain != landingUrl.effectiveDomain) {
+        throw new PageStateError('Navigated to a different domain')
+      }
+
+      history.flatMap((s) => s ? [new URLPlus(s)] : []).forEach((previousUrl) => {
         if (currentUrl.pathname == previousUrl.pathname) {
           throw new PageStateError('Navigated to a previously visited URL');
         }

@@ -1,8 +1,10 @@
 {
+  "type": "module",
   "dependencies": {
     "@cliqz/adblocker-playwright": "^1.26.8",
     "@playwright/browser-chromium": "^1.38.1",
     "mnemonist": "^0.39.5",
+    "parse-domain": "^8.0.1",
     "playwright": "^1.38.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
