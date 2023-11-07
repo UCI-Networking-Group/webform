@@ -3,46 +3,41 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
 import process from 'node:process';
 import mnemonist from 'mnemonist';
+import { Locator, Page } from 'playwright';
 
 const { Heap } = mnemonist;
 
 /**
  * Guess the type of a form
- *
- * @param {import('playwright').Locator} locator
- * @returns {Promise<string>}
  */
-async function checkFormType(locator) {
+async function checkFormType(locator: Locator): Promise<string|null> {
   for (const elem of await locator.locator('[type=submit]').all()) {
     const textContent = await elem.textContent();
 
-    if (textContent.search(/\bsign\s*up\b/gi)) {
+    if (textContent?.search(/\bsign\s*up\b/gi)) {
       return 'SIGN_UP';
-    } if (textContent.search(/\b(sign|log)\s*in\b/gi)) {
+    } if (textContent?.search(/\b(sign|log)\s*in\b/gi)) {
       return 'LOGIN';
     }
   }
 
+  return null;
 }
 
 /**
  * Guess the type of a field in a form
- *
- * @param {import('playwright').Locator} formLocator
- * @param {import('playwright').Locator} fieldLocator
- * @returns {Promise<string>}
  */
-async function checkFieldType(formLocator, fieldLocator) {
+async function checkFieldType(formLocator: Locator, fieldLocator: Locator): Promise<string> {
   // TODO:
   //   - more than one types ("Email or phone number")
   //   - check field label
 
-  const testStrings = [];
+  const testStrings: string[] = [];
 
-  const placeholder = await fieldLocator.evaluate((node) => node.placeholder);
-  const fieldId = await fieldLocator.evaluate((node) => node.id);
-  const fieldName = await fieldLocator.evaluate((node) => node.name);
+  const placeholder = await fieldLocator.evaluate((node) => (node as HTMLInputElement).placeholder);
+  const fieldName = await fieldLocator.evaluate((node) => (node as HTMLInputElement).name);
   const ariaLabel = await fieldLocator.evaluate((node) => node.getAttribute('aria-label'));
+  const fieldId = await fieldLocator.evaluate((node) => node.id);
   const labelElement = formLocator.locator(`label[for="${fieldId}"]`);
 
   if (placeholder) testStrings.push(placeholder);
@@ -51,7 +46,7 @@ async function checkFieldType(formLocator, fieldLocator) {
 
   if (await labelElement.count() > 0) {
     const labelText = await labelElement.textContent();
-    testStrings.push(labelText);
+    if (labelText) testStrings.push(labelText);
   }
 
   console.log(testStrings);
@@ -83,25 +78,24 @@ async function checkFieldType(formLocator, fieldLocator) {
 
 /**
  * Attributes of an element (locator)
- * @typedef {Object} ElementAttributes
- * @property {string} id
- * @property {string} tagName
- * @property {string} textContent
- * @property {number} width
- * @property {number} height
  */
+interface ElementAttributes {
+    id: string;
+    tagName: string;
+    textContent: string;
+    width: number;
+    height: number;
+}
 
 /**
  * Get an element's attributes
- *
- * @param {import('playwright').Locator} locator
- * @returns {Promise<ElementAttributes>}
  */
-async function getElementAttributes(locator) {
-  const attributes = await locator.evaluate((node) => ({
+async function getElementAttributes(locator: Locator): Promise<ElementAttributes> {
+  const attributes: ElementAttributes = await locator.evaluate((node) => ({
     id: node.id,
     tagName: node.tagName,
-    textContent: node.textContent,
+    textContent: node.textContent || "",
+    width: 0, height: 0,
   }));
 
   const boundingBox = await locator.boundingBox();
@@ -119,11 +113,8 @@ async function getElementAttributes(locator) {
 
 /**
  * Estimate the reward of clicking an element
- *
- * @param {ElementAttributes} attributes
- * @returns {number}
  */
-function estimateClickReward(attributes) {
+function estimateClickReward(attributes: ElementAttributes): number {
   // Not likely clickable if too small
   if (attributes.width <= 16 || attributes.height <= 16) {
     return 0;
@@ -141,12 +132,8 @@ function estimateClickReward(attributes) {
 
 /**
  * Locate the element that match the given attributes
- *
- * @param {import('playwright').Page} page
- * @param {ElementAttributes} matchingAttributes
- * @returns {Promise<import('playwright').Locator|null>}
  */
-async function locateElement(page, matchingAttributes) {
+async function locateElement(page: Page, matchingAttributes: ElementAttributes): Promise<Locator|null>  {
   const id = matchingAttributes.id;
 
   if (id.match(/^[-A-Za-z0-9_]+$/) !== null) {
@@ -167,29 +154,25 @@ async function locateElement(page, matchingAttributes) {
 }
 
 class PageStateError extends Error {
-  constructor(message) {
+  constructor(message: string) {
     super(message);
     this.name = this.constructor.name;
   }
 }
 
-async function recoverPageState(page, url, steps) {
+async function recoverPageState(page: Page, url: string, steps: ElementAttributes[]) {
   const landingUrl = new URL(url);
   await page.goto(url, { waitUntil: 'networkidle' });
 
-  const history = [url];
+  const history: (string|null)[] = [url];
   const oldAttributeMark = "data-rr" + (new Date()).getTime();
 
   let hasNavigated = false;
-  const navigationHandler = (data) => { hasNavigated = true; };
+  const navigationHandler = (data: any) => { hasNavigated = true; };
   page.on("domcontentloaded", navigationHandler)
 
-  for (const stepInfo of steps) {
+  for (const attr of steps) {
     hasNavigated = false;
-
-    /** @type {ElementAttributes} */
-    const attr = stepInfo.attributes;
-
     console.log('Element:', attr);
 
     const element = await locateElement(page, attr);
@@ -211,15 +194,11 @@ async function recoverPageState(page, url, steps) {
     if (hasNavigated) {
       const currentUrl = new URL(page.url());
 
-      for (let i = 0; i < history.length; i++) {
-        if (history[i] !== null) {
-          const previousUrl = new URL(history[i]);
-
-          if (currentUrl.pathname == previousUrl.pathname) {
-            throw new PageStateError('Navigated to a previously visited URL');
-          }
+      history.flatMap((s) => s ? [new URL(s)] : []).forEach((previousUrl) => {
+        if (currentUrl.pathname == previousUrl.pathname) {
+          throw new PageStateError('Navigated to a previously visited URL');
         }
-      }
+      });
     }
 
     history.push(hasNavigated ? page.url() : null);
@@ -236,7 +215,14 @@ async function recoverPageState(page, url, steps) {
   const maxJobCount = 100;
   const landingURLs = process.argv.slice(2);
 
-  const jobQueue = new Heap((job1, job2) => {
+  interface JobSpec {
+    priority: number,
+    ts: number,
+    url: string,
+    steps: ElementAttributes[],
+  }
+
+  const jobQueue = new Heap<JobSpec>((job1, job2) => {
     let retVal = Math.sign(job2.priority - job1.priority);
     retVal = retVal === 0 ? Math.sign(job2.ts - job1.ts) : retVal;
     return retVal;
@@ -259,7 +245,7 @@ async function recoverPageState(page, url, steps) {
   let jobCount = 0;
 
   // Main loop
-  while (jobQueue.size > 0 && jobCount < maxJobCount) {
+  while (jobCount < maxJobCount && jobQueue.size > 0) {
     const context = await browser.newContext({
       locale: "en-US",
       timezoneId: "America/Los_Angeles",
@@ -275,15 +261,15 @@ async function recoverPageState(page, url, steps) {
 
     jobCount++;
 
-    const job = jobQueue.pop();
+    const job = jobQueue.pop()!;
     console.log('Current job: ', JSON.stringify(job, null, 2));
 
-    let oldAttributeMark = null;
+    let oldAttributeMark = "";
 
     try {
       oldAttributeMark = await recoverPageState(page, job.url, job.steps);
     } catch (e) {
-      if (e.name === 'PageStateError' || e.name === 'TimeoutError') {
+      if ((e instanceof Error) && (e.name === 'PageStateError' || e.name === 'TimeoutError')) {
         console.log('Failed to recover page state:', e.message);
         continue;
       } else {
@@ -334,10 +320,7 @@ async function recoverPageState(page, url, steps) {
       if (clickReward > 0) {
         const newSteps = job.steps.slice();
 
-        newSteps.push({
-          attributes,
-          navigation: null,
-        });
+        newSteps.push(attributes);
 
         const newJobDesc = {
           priority: clickReward,
