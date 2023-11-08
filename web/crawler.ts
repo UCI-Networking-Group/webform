@@ -6,7 +6,14 @@ import mnemonist from 'mnemonist';
 import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
 import { parseDomain, ParseResultType } from "parse-domain";
 
-const { Heap } = mnemonist;
+/**
+ * TODO List:
+ *  - Integrate an auto cookie consent extension, like Consent-O-Matic or I-Still-Dont-Care-About-Cookies 
+ *  - Go deeper into multi-step forms
+ *  - Store the results on disk
+ */
+
+const DOM_VISITED_ATTR = "data-dom-visited" + (Math.random() + 1).toString(36).substring(2);
 
 class URLPlus extends URL {
   get effectiveDomain(): string {
@@ -106,7 +113,7 @@ interface ElementAttributes {
 async function getElementAttributes(locator: Locator): Promise<ElementAttributes> {
   const attributes: ElementAttributes = await locator.evaluate((node) => ({
     id: node.id,
-    tagName: node.tagName,
+    tagName: node.tagName.toLowerCase(),
     textContent: node.textContent || "",
     width: 0, height: 0,
   }));
@@ -136,7 +143,7 @@ function estimateClickReward(attributes: ElementAttributes): number {
   // TODO: In the future, a text classifier can be used.
   const text = attributes.textContent;
 
-  if (text.search(/\b(sign|create|forgot|reset|register|new|log|setting|join|subscribe)s?\b/gi) >= 0) {
+  if (text.search(/\b(sign|create|forgot|reset|register|new|enroll|log|setting|join|subscribe)s?\b/gi) >= 0) {
     return 500;
   }
 
@@ -193,7 +200,6 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
   await waitForLoading(page);
 
   const history: (string|null)[] = [url];
-  const oldAttributeMark = "data-rr" + (new Date()).getTime();
 
   const landingUrl = new URLPlus(url);
   let hasNavigated = false;
@@ -211,11 +217,20 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
     }
 
     page.getByRole('button').or(page.getByRole('link'))
-      .evaluateAll((el, attrName) => el.forEach((e) => e.setAttribute(attrName, '')), oldAttributeMark);
+      .evaluateAll((el, attrName) => el.forEach((e) => e.setAttribute(attrName, '')), DOM_VISITED_ATTR);
 
-    await element.click();
+    try {
+      await element.click();
+    } catch (e) {
+      if (e instanceof PlaywrightErrors.TimeoutError) {
+        await element.evaluate((e) => (e as HTMLElement).click());
+      } else {
+        throw e;
+      }
+    }
 
     // Wait for possible navigation
+    await page.waitForTimeout(1000);
     await waitForLoading(page);
 
     // Check navigation loop
@@ -239,8 +254,32 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
   page.off("domcontentloaded", navigationHandler);
 
   console.log('Successfully recovered page state. URL:', page.url());
+}
 
-  return oldAttributeMark;
+async function checkForms(page: Page) {
+  for (const form of await page.locator('form').all()) {
+    if (await form.evaluate((e, attrName) => e.hasAttribute(attrName), DOM_VISITED_ATTR)) {
+      // Skip because the element has been tried
+      continue;
+    }
+
+    try {
+      await form.scrollIntoViewIfNeeded();
+    } catch (e) {
+      console.warn(e);
+      continue;
+    }
+    const formType = await checkFormType(form);
+
+    console.log(`FORM TYPE: ${formType}`);
+
+    for (const inputField of await form.locator('input').all()) {
+      if (await inputField.isVisible()) {
+        const fieldType = await checkFieldType(form, inputField);
+        console.log(`- FIELD TYPE: ${fieldType}`);
+      }
+    }
+  }
 }
 
 (async () => {
@@ -254,20 +293,18 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
     steps: ElementAttributes[],
   }
 
-  const jobQueue = new Heap<JobSpec>((job1, job2) => {
+  const jobQueue = new mnemonist.Heap<JobSpec>((job1, job2) => {
     let retVal = Math.sign(job2.priority - job1.priority);
     retVal = retVal === 0 ? Math.sign(job2.ts - job1.ts) : retVal;
     return retVal;
   });
 
-  for (const url of landingURLs) {
-    jobQueue.push({
-      priority: 1000,
-      ts: new Date().getTime(),
-      steps: [],
-      url,
-    });
-  }
+  landingURLs.map((url) => jobQueue.push({
+    priority: 1000,
+    ts: new Date().getTime(),
+    steps: [],
+    url,
+  }));
 
   // Stealth plugin - not sure if it actually helps but why not
   chromium.use(StealthPlugin());
@@ -296,10 +333,8 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
     const job = jobQueue.pop()!;
     console.log('Current job: ', JSON.stringify(job, null, 2));
 
-    let oldAttributeMark = "";
-
     try {
-      oldAttributeMark = await recoverPageState(page, job.url, job.steps);
+      await recoverPageState(page, job.url, job.steps);
     } catch (e) {
       if (e instanceof PageStateError || e instanceof PlaywrightErrors.TimeoutError) {
         console.log('Failed to recover page state:', e.message);
@@ -309,27 +344,9 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
       }
     }
 
-    console.log('Checking forms...');
-
     // Search the webpage for forms
-    for (const form of await page.locator('form').all()) {
-      try {
-        await form.scrollIntoViewIfNeeded();
-      } catch (e) {
-        console.warn(e);
-        continue;
-      }
-      const formType = await checkFormType(form);
-
-      console.log(`FORM TYPE: ${formType}`);
-
-      for (const inputField of await form.locator('input').all()) {
-        if (await inputField.isVisible()) {
-          const fieldType = await checkFieldType(form, inputField);
-          console.log(`- FIELD TYPE: ${fieldType}`);
-        }
-      }
-    }
+    console.log('Checking forms...');
+    await checkForms(page);
 
     // Identify possible next steps
     const locator = page.getByRole('button').or(page.getByRole('link'));
@@ -344,7 +361,7 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
       const attributes = await getElementAttributes(element);
       const clickReward = estimateClickReward(attributes);
 
-      if (await element.evaluate((e, attrName) => e.hasAttribute(attrName), oldAttributeMark)) {
+      if (await element.evaluate((e, attrName) => e.hasAttribute(attrName), DOM_VISITED_ATTR)) {
         // Skip because the element has been tried
         continue;
       }
