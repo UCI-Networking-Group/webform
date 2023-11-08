@@ -11,7 +11,7 @@ module.exports = {
     sourceType: 'module',
   },
   rules: {
-    'max-len': 120,
+    'max-len': ['warn', { code: 120 }],
     'no-await-in-loop': 'off',
     // Removed 'ForOfStatement'
     'no-restricted-syntax': ['error', 'ForInStatement', 'LabeledStatement', 'WithStatement'],

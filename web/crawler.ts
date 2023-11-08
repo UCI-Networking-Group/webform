@@ -3,7 +3,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
 import process from 'node:process';
 import mnemonist from 'mnemonist';
-import { Locator, Page } from 'playwright';
+import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
 import { parseDomain, ParseResultType } from "parse-domain";
 
 const { Heap } = mnemonist;
@@ -173,15 +173,31 @@ class PageStateError extends Error {
   }
 }
 
+async function waitForLoading(page: Page, timeout: number=30000) {
+  const tstart = performance.now();
+
+  // Wait for networkidle but still continue if timeout
+  try {
+    await page.waitForLoadState('networkidle', { timeout });
+  } catch (e) {
+    if (e instanceof PlaywrightErrors.TimeoutError) {} else throw e;
+  }
+
+  const nextTimeout = Math.max(timeout - (performance.now() - tstart), 1);
+  // At minimum, wait for load event -- should return immediately if already loaded
+  page.waitForLoadState('load', { timeout: nextTimeout });
+}
+
 async function recoverPageState(page: Page, url: string, steps: ElementAttributes[]) {
-  const landingUrl = new URLPlus(url);
-  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.goto(url, { waitUntil: 'commit' });
+  await waitForLoading(page);
 
   const history: (string|null)[] = [url];
   const oldAttributeMark = "data-rr" + (new Date()).getTime();
 
+  const landingUrl = new URLPlus(url);
   let hasNavigated = false;
-  const navigationHandler = (data: any) => { hasNavigated = true; };
+  const navigationHandler = (_: any) => { hasNavigated = true; };
   page.on("domcontentloaded", navigationHandler)
 
   for (const attr of steps) {
@@ -200,8 +216,7 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
     await element.click();
 
     // Wait for possible navigation
-    await page.waitForTimeout(1000);
-    await page.waitForLoadState('networkidle');
+    await waitForLoading(page);
 
     // Check navigation loop
     if (hasNavigated) {
@@ -286,7 +301,7 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
     try {
       oldAttributeMark = await recoverPageState(page, job.url, job.steps);
     } catch (e) {
-      if ((e instanceof Error) && (e.name === 'PageStateError' || e.name === 'TimeoutError')) {
+      if (e instanceof PageStateError || e instanceof PlaywrightErrors.TimeoutError) {
         console.log('Failed to recover page state:', e.message);
         continue;
       } else {
