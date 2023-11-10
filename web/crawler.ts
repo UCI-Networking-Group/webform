@@ -3,7 +3,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
 import process from 'node:process';
 import mnemonist from 'mnemonist';
-import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
+import { ElementHandle, Locator, Page, selectors, errors as PlaywrightErrors } from 'playwright';
 import { parseDomain, ParseResultType } from "parse-domain";
 
 /**
@@ -32,11 +32,11 @@ class URLPlus extends URL {
  */
 async function checkFormType(locator: Locator): Promise<string|null> {
   for (const elem of await locator.locator('[type=submit]').all()) {
-    const textContent = await elem.textContent();
+    const textContent = await elem.textContent() || '';
 
-    if (textContent?.search(/\bsign\s*up\b/gi)) {
+    if (textContent.search(/\bsign\s*up\b/gi) >= 0) {
       return 'SIGN_UP';
-    } if (textContent?.search(/\b(sign|log)\s*in\b/gi)) {
+    } if (textContent.search(/\b(sign|log)\s*(in|on)\b/gi) >= 0) {
       return 'LOGIN';
     }
   }
@@ -86,8 +86,8 @@ async function checkFieldType(formLocator: Locator, fieldLocator: Locator): Prom
       return 'BIRTHDAY';
     } if (s.search(/\baddress\s+line\b/gi) >= 0) {
       return 'PHYSICAL_ADDRESS';
-    } if (s.search(/\bzip\s*code\b/gi) >= 0) {
-      return 'ZIP_CODE';
+    } if (s.search(/\b(zip|postal)\s*code\b/gi) >= 0) {
+      return 'POSTAL_CODE';
     } if (s.search(/\buser\s*(name|id)\b/gi) >= 0) {
       return 'USERNAME';
     }
@@ -103,8 +103,9 @@ interface ElementAttributes {
     id: string;
     tagName: string;
     textContent: string;
-    width: number;
-    height: number;
+    href?: string;
+    width?: number;
+    height?: number;
 }
 
 /**
@@ -115,7 +116,7 @@ async function getElementAttributes(locator: Locator): Promise<ElementAttributes
     id: node.id,
     tagName: node.tagName.toLowerCase(),
     textContent: node.textContent || "",
-    width: 0, height: 0,
+    ...(node instanceof HTMLAnchorElement ? { href: node.href } : {})
   }));
 
   const boundingBox = await locator.boundingBox();
@@ -123,9 +124,6 @@ async function getElementAttributes(locator: Locator): Promise<ElementAttributes
   if (boundingBox !== null) {
     attributes.width = boundingBox.width;
     attributes.height = boundingBox.height;
-  } else {
-    attributes.width = 0;
-    attributes.height = 0;
   }
 
   return attributes;
@@ -135,15 +133,10 @@ async function getElementAttributes(locator: Locator): Promise<ElementAttributes
  * Estimate the reward of clicking an element
  */
 function estimateClickReward(attributes: ElementAttributes): number {
-  // Not likely clickable if too small
-  if (attributes.width <= 16 || attributes.height <= 16) {
-    return 0;
-  }
-
   // TODO: In the future, a text classifier can be used.
   const text = attributes.textContent;
 
-  if (text.search(/\b(sign|create|forgot|reset|register|new|enroll|log|setting|join|subscribe)s?\b/gi) >= 0) {
+  if (text.search(/\b(sign\s*(up|in|on)|creates?|forgot|resets?|registers?|new|enrolls?|log\s*(in|on)|settings?|joins?|subscribes?|inquiry|contacts?)\b/gi) >= 0) {
     return 500;
   }
 
@@ -191,24 +184,23 @@ async function waitForLoading(page: Page, timeout: number=30000) {
   }
 
   const nextTimeout = Math.max(timeout - (performance.now() - tstart), 1);
-  // At minimum, wait for load event -- should return immediately if already loaded
-  page.waitForLoadState('load', { timeout: nextTimeout });
+  // At minimum, wait for DOMContentLoaded event -- should return immediately if already there
+  page.waitForLoadState('domcontentloaded', { timeout: nextTimeout });
 }
 
 async function recoverPageState(page: Page, url: string, steps: ElementAttributes[]) {
+  const history: (string|null)[] = [url];
+  const landingUrl = new URLPlus(url);
+  let hasNavigated = false;
+
+  const navigationHandler = (_: any) => { hasNavigated = true; };
+  page.on("domcontentloaded", navigationHandler);
+
   await page.goto(url, { waitUntil: 'commit' });
   await waitForLoading(page);
 
-  const history: (string|null)[] = [url];
-
-  const landingUrl = new URLPlus(url);
-  let hasNavigated = false;
-  const navigationHandler = (_: any) => { hasNavigated = true; };
-  page.on("domcontentloaded", navigationHandler)
-
-  for (const attr of steps) {
+  for (const [index, attr] of steps.entries()) {
     hasNavigated = false;
-    console.log('Element:', attr);
 
     const element = await locateElement(page, attr);
 
@@ -216,8 +208,8 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
       throw new PageStateError('Cannot find specified element');
     }
 
-    page.getByRole('button').or(page.getByRole('link'))
-      .evaluateAll((el, attrName) => el.forEach((e) => e.setAttribute(attrName, '')), DOM_VISITED_ATTR);
+    page.evaluate(markNewClickableElements, [DOM_VISITED_ATTR, index.toString()]);
+    const beforeUrl = page.url();
 
     try {
       await element.click();
@@ -233,14 +225,18 @@ async function recoverPageState(page: Page, url: string, steps: ElementAttribute
     await page.waitForTimeout(1000);
     await waitForLoading(page);
 
-    // Check navigation loop
+    const afterUrl = page.url();
+    if (beforeUrl != afterUrl) hasNavigated = true;
+
     if (hasNavigated) {
-      const currentUrl = new URLPlus(page.url());
+      console.log('Navigated to:', afterUrl);
+      const currentUrl = new URLPlus(afterUrl);
 
       if (currentUrl.effectiveDomain != landingUrl.effectiveDomain) {
         throw new PageStateError('Navigated to a different domain')
       }
 
+      // Check navigation loop
       history.flatMap((s) => s ? [new URLPlus(s)] : []).forEach((previousUrl) => {
         if (currentUrl.pathname == previousUrl.pathname) {
           throw new PageStateError('Navigated to a previously visited URL');
@@ -280,6 +276,36 @@ async function checkForms(page: Page) {
       }
     }
   }
+}
+
+function markNewClickableElements(args: string[]) {
+  const [markAttr, markValue] = args as [string, string];
+  const knownHrefs = new Set<string>();
+
+  function dfs(element: HTMLElement) {
+    // Skip marked elements
+    if (element.hasAttribute(markAttr)) return;
+
+    // Skip disabled elements
+    if (element.ariaDisabled === "true") return;
+    // But do not skip hidden elements because we may still want to click on them
+
+    if (element instanceof HTMLAnchorElement && element.onclick === null) {
+      // Deduplicate links
+      if (knownHrefs.has(element.href)) return;
+      knownHrefs.add(element.href);
+    } else if (!!element.onclick
+        || element instanceof HTMLButtonElement
+        || ["link", "button"].includes(element.role || "")) {
+      element.setAttribute(markAttr, markValue);
+    } else {
+      for (const child of element.children) {
+        if (child instanceof HTMLElement) dfs(child);
+      }
+    }
+  }
+
+  dfs(document.body);
 }
 
 (async () => {
@@ -348,25 +374,26 @@ async function checkForms(page: Page) {
     console.log('Checking forms...');
     await checkForms(page);
 
-    // Identify possible next steps
-    const locator = page.getByRole('button').or(page.getByRole('link'));
-    for (const element of await locator.all()) {
+    page.evaluate(markNewClickableElements, [DOM_VISITED_ATTR, "next"]);
+    let newJobCount = 0;
+
+    for (const element of await page.locator(`[${DOM_VISITED_ATTR}="next"]`).all()) {
+      let attributes: ElementAttributes;
+
       try {
-        await element.scrollIntoViewIfNeeded();
+        attributes = await getElementAttributes(element);
       } catch (e) {
-        console.warn(e);
-        continue;
+        if (e instanceof PlaywrightErrors.TimeoutError) {
+          continue;
+        } else {
+          throw e;
+        }
       }
 
-      const attributes = await getElementAttributes(element);
       const clickReward = estimateClickReward(attributes);
 
-      if (await element.evaluate((e, attrName) => e.hasAttribute(attrName), DOM_VISITED_ATTR)) {
-        // Skip because the element has been tried
-        continue;
-      }
-
       if (clickReward > 0) {
+        newJobCount += 1;
         const newSteps = job.steps.slice();
 
         newSteps.push(attributes);
@@ -384,6 +411,7 @@ async function checkForms(page: Page) {
       }
     }
 
+    console.log('New jobs:', newJobCount);
     console.log('Job queue size:', jobQueue.size);
 
     await page.waitForTimeout(2000); // For now, avoid running too fast
