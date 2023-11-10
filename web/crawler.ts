@@ -2,35 +2,36 @@ import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
 import process from 'node:process';
+import assert from 'node:assert/strict';
 import mnemonist from 'mnemonist';
-import { ElementHandle, Locator, Page, selectors, errors as PlaywrightErrors } from 'playwright';
-import { parseDomain, ParseResultType } from "parse-domain";
+import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
+import { parseDomain, ParseResultType } from 'parse-domain';
 
 /**
  * TODO List:
- *  - Integrate an auto cookie consent extension, like Consent-O-Matic or I-Still-Dont-Care-About-Cookies 
+ *  - Integrate an auto cookie consent extension, like Consent-O-Matic or I-Still-Dont-Care-About-Cookies
  *  - Go deeper into multi-step forms
  *  - Store the results on disk
  */
 
-const DOM_VISITED_ATTR = "data-dom-visited" + (Math.random() + 1).toString(36).substring(2);
+const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
 
 class URLPlus extends URL {
   get effectiveDomain(): string {
     const parsed = parseDomain(this.hostname);
 
     if (parsed.type === ParseResultType.Listed) {
-      return parsed.domain + "." + parsed.topLevelDomains.join(".");
-    } else {
-      return this.hostname;
+      return parsed.domain + '.' + parsed.topLevelDomains.join('.');
     }
+
+    return this.hostname;
   }
 }
 
 /**
  * Guess the type of a form
  */
-async function checkFormType(locator: Locator): Promise<string|null> {
+async function checkFormType(locator: Locator): Promise<string | null> {
   for (const elem of await locator.locator('[type=submit]').all()) {
     const textContent = await elem.textContent() || '';
 
@@ -96,45 +97,22 @@ async function checkFieldType(formLocator: Locator, fieldLocator: Locator): Prom
   return 'UNKNOWN';
 }
 
-/**
- * Attributes of an element (locator)
- */
-interface ElementAttributes {
-    id: string;
-    tagName: string;
-    textContent: string;
-    href?: string;
-    width?: number;
-    height?: number;
-}
-
-/**
- * Get an element's attributes
- */
-async function getElementAttributes(locator: Locator): Promise<ElementAttributes> {
-  const attributes: ElementAttributes = await locator.evaluate((node) => ({
-    id: node.id,
-    tagName: node.tagName.toLowerCase(),
-    textContent: node.textContent || "",
-    ...(node instanceof HTMLAnchorElement ? { href: node.href } : {})
-  }));
-
-  const boundingBox = await locator.boundingBox();
-
-  if (boundingBox !== null) {
-    attributes.width = boundingBox.width;
-    attributes.height = boundingBox.height;
-  }
-
-  return attributes;
+interface StepSpec {
+  action: ['goto' | 'click', ...string[]],
+  origin?: {
+    location: string,
+    tagName: string,
+    textContent: string,
+    attributes: { [key: string]: string },
+  },
 }
 
 /**
  * Estimate the reward of clicking an element
  */
-function estimateClickReward(attributes: ElementAttributes): number {
+function estimateReward(step: StepSpec): number {
   // TODO: In the future, a text classifier can be used.
-  const text = attributes.textContent;
+  const text = step?.origin?.textContent.trim() || '';
 
   if (text.search(/\b(sign\s*(up|in|on)|creates?|forgot|resets?|registers?|new|enrolls?|log\s*(in|on)|settings?|joins?|subscribes?|inquiry|contacts?)\b/gi) >= 0) {
     return 500;
@@ -146,20 +124,24 @@ function estimateClickReward(attributes: ElementAttributes): number {
 /**
  * Locate the element that match the given attributes
  */
-async function locateElement(page: Page, matchingAttributes: ElementAttributes): Promise<Locator|null>  {
-  const id = matchingAttributes.id;
+async function locateOriginElement(page: Page, step: StepSpec): Promise<Locator | null> {
+  const tagName = step.origin?.tagName || 'invalid';
+
+  // Match by ID
+  const id = step.origin?.attributes.id || '';
 
   if (id.match(/^[-A-Za-z0-9_]+$/) !== null) {
-    const locator = page.locator(`#${id}`);
+    const locator = page.locator(`${tagName}#${id}`);
     if ((await locator.count()) > 0) return locator.first();
   }
 
-  const text = matchingAttributes.textContent;
+  // Match by text content
+  const text = step.origin?.textContent.trim();
 
   if (text !== '') {
-    for (const element of await page.locator(matchingAttributes.tagName).all()) {
-      const attr = await getElementAttributes(element);
-      if (text === attr.textContent) return element;
+    for (const element of await page.locator(tagName).all()) {
+      const elemText = (await element.textContent() || '').trim();
+      if (text === elemText) return element;
     }
   }
 
@@ -173,81 +155,153 @@ class PageStateError extends Error {
   }
 }
 
-async function waitForLoading(page: Page, timeout: number=30000) {
+async function waitForLoading(page: Page, timeout: number = 30000) {
   const tstart = performance.now();
 
   // Wait for networkidle but still continue if timeout
   try {
     await page.waitForLoadState('networkidle', { timeout });
   } catch (e) {
-    if (e instanceof PlaywrightErrors.TimeoutError) {} else throw e;
+    if (!(e instanceof PlaywrightErrors.TimeoutError)) throw e;
   }
 
   const nextTimeout = Math.max(timeout - (performance.now() - tstart), 1);
   // At minimum, wait for DOMContentLoaded event -- should return immediately if already there
-  page.waitForLoadState('domcontentloaded', { timeout: nextTimeout });
+  await page.waitForLoadState('domcontentloaded', { timeout: nextTimeout });
 }
 
-async function recoverPageState(page: Page, url: string, steps: ElementAttributes[]) {
-  const history: (string|null)[] = [url];
-  const landingUrl = new URLPlus(url);
+function findNextSteps(args: string[]): StepSpec[] {
+  const [markAttr, markValue] = args as [string, string];
+
+  // Ref: https://gist.github.com/iiLaurens/81b1b47f6259485c93ce6f0cdd17490a
+  let clickableElements: Element[] = [];
+
+  for (const element of document.body.querySelectorAll('*')) {
+    // Skip already marked elements
+    if (element.hasAttribute(markAttr)) continue;
+
+    // Skip disabled elements
+    if (element.ariaDisabled === 'true') continue;
+    // But do not skip hidden elements because we may still want to click on them
+
+    if (!!(element as HTMLElement).onclick
+        || ['link', 'button'].includes(element.role || '')
+        || ['A', 'BUTTON'].includes(element.tagName)) {
+      element.setAttribute(markAttr, markValue);
+      clickableElements.push(element);
+    }
+  }
+
+  // Only keep inner clickable items
+  clickableElements = clickableElements.filter((x) => !clickableElements.some((y) => x.contains(y) && x !== y));
+
+  const possibleSteps: StepSpec[] = [];
+
+  for (const element of clickableElements) {
+    const origin = {
+      location: window.location.href,
+      tagName: element.tagName,
+      attributes: [...element.attributes].reduce((o, a) => Object.assign(o, { [a.name]: a.value }), {}),
+      textContent: element.textContent || '',
+    };
+
+    if (element instanceof HTMLAnchorElement && element.onclick === null && !!element.href.match(/^https?:/)) {
+      // A pure anchor element
+      possibleSteps.push({
+        action: ['goto', element.href],
+        origin,
+      });
+    } else {
+      // Something else that is clickable
+      possibleSteps.push({
+        action: ['click'],
+        origin,
+      });
+    }
+  }
+
+  return possibleSteps;
+}
+
+async function doSteps(page: Page, steps: StepSpec[]) {
+  const history: (string | null)[] = [];
   let hasNavigated = false;
 
-  const navigationHandler = (_: any) => { hasNavigated = true; };
-  page.on("domcontentloaded", navigationHandler);
+  const navigationHandler = () => { hasNavigated = true; };
+  page.on('domcontentloaded', navigationHandler);
 
-  await page.goto(url, { waitUntil: 'commit' });
-  await waitForLoading(page);
-
-  for (const [index, attr] of steps.entries()) {
+  for (const [index, step] of steps.entries()) {
     hasNavigated = false;
+    const [command, ...args] = step.action;
+    let actionFunc = async () => {};
 
-    const element = await locateElement(page, attr);
+    switch (command) {
+      case 'goto': {
+        actionFunc = async () => {
+          await page.goto(args[0], { referer: step.origin?.location, waitUntil: 'commit' });
+        };
+        break;
+      }
+      case 'click': {
+        const element = await locateOriginElement(page, step);
+        if (element === null) throw new PageStateError('Cannot find specified element');
 
-    if (element === null) {
-      throw new PageStateError('Cannot find specified element');
+        actionFunc = async () => {
+          try {
+            await element.click();
+          } catch (e) {
+            if (e instanceof PlaywrightErrors.TimeoutError) {
+              await element.evaluate((elem) => (elem as HTMLElement).click());
+            } else {
+              throw e;
+            }
+          }
+        };
+
+        break;
+      }
+      default:
+        assert.fail(`Invalid action ${command}`);
     }
 
-    page.evaluate(markNewClickableElements, [DOM_VISITED_ATTR, index.toString()]);
+    if (index + 1 === steps.length) {
+      // Before the last step, mark elements generated in previous steps
+      await page.evaluate(findNextSteps, [DOM_VISITED_ATTR, 'old']);
+    }
+
     const beforeUrl = page.url();
 
-    try {
-      await element.click();
-    } catch (e) {
-      if (e instanceof PlaywrightErrors.TimeoutError) {
-        await element.evaluate((e) => (e as HTMLElement).click());
-      } else {
-        throw e;
-      }
-    }
+    await actionFunc();
 
     // Wait for possible navigation
     await page.waitForTimeout(1000);
     await waitForLoading(page);
 
     const afterUrl = page.url();
-    if (beforeUrl != afterUrl) hasNavigated = true;
+    if (beforeUrl !== afterUrl) hasNavigated = true;
 
     if (hasNavigated) {
       console.log('Navigated to:', afterUrl);
-      const currentUrl = new URLPlus(afterUrl);
 
-      if (currentUrl.effectiveDomain != landingUrl.effectiveDomain) {
-        throw new PageStateError('Navigated to a different domain')
+      const beforeUrlParsed = new URLPlus(beforeUrl);
+      const afterUrlParsed = new URLPlus(afterUrl);
+
+      if (index > 0 && beforeUrlParsed.effectiveDomain !== afterUrlParsed.effectiveDomain) {
+        throw new PageStateError('Navigated to a different domain');
       }
 
       // Check navigation loop
-      history.flatMap((s) => s ? [new URLPlus(s)] : []).forEach((previousUrl) => {
-        if (currentUrl.pathname == previousUrl.pathname) {
+      history.flatMap((s) => (s ? [new URLPlus(s)] : [])).forEach((historyUrl) => {
+        if (afterUrlParsed.pathname === historyUrl.pathname) {
           throw new PageStateError('Navigated to a previously visited URL');
         }
       });
     }
 
-    history.push(hasNavigated ? page.url() : null);
+    history.push(hasNavigated ? afterUrl : null);
   }
 
-  page.off("domcontentloaded", navigationHandler);
+  page.off('domcontentloaded', navigationHandler);
 
   console.log('Successfully recovered page state. URL:', page.url());
 }
@@ -278,58 +332,46 @@ async function checkForms(page: Page) {
   }
 }
 
-function markNewClickableElements(args: string[]) {
-  const [markAttr, markValue] = args as [string, string];
-  const knownHrefs = new Set<string>();
+/**
+ * Build a new step by appending the given next step to the given steps, while rejecting invalid next step
+ */
+function buildSteps(steps: StepSpec[], nextStep: StepSpec): StepSpec[] | null {
+  if (nextStep.action[0] === 'goto') {
+    const originalUrl = new URLPlus(steps[0].action[1]);
+    const newUrl = new URLPlus(nextStep.action[1]);
 
-  function dfs(element: HTMLElement) {
-    // Skip marked elements
-    if (element.hasAttribute(markAttr)) return;
+    // Do not allow cross-domain navigation
+    if (originalUrl.effectiveDomain !== newUrl.effectiveDomain) return null;
 
-    // Skip disabled elements
-    if (element.ariaDisabled === "true") return;
-    // But do not skip hidden elements because we may still want to click on them
+    // Avoid navigating to the same page
+    if (originalUrl.pathname === newUrl.pathname) return null;
 
-    if (element instanceof HTMLAnchorElement && element.onclick === null) {
-      // Deduplicate links
-      if (knownHrefs.has(element.href)) return;
-      knownHrefs.add(element.href);
-    } else if (!!element.onclick
-        || element instanceof HTMLButtonElement
-        || ["link", "button"].includes(element.role || "")) {
-      element.setAttribute(markAttr, markValue);
-    } else {
-      for (const child of element.children) {
-        if (child instanceof HTMLElement) dfs(child);
-      }
-    }
+    return [nextStep];
   }
 
-  dfs(document.body);
+  return [...steps, nextStep];
 }
 
-(async () => {
+await (async () => {
   const maxJobCount = 100;
   const landingURLs = process.argv.slice(2);
 
   interface JobSpec {
     priority: number,
-    ts: number,
-    url: string,
-    steps: ElementAttributes[],
+    depth: number,
+    steps: StepSpec[],
   }
 
   const jobQueue = new mnemonist.Heap<JobSpec>((job1, job2) => {
     let retVal = Math.sign(job2.priority - job1.priority);
-    retVal = retVal === 0 ? Math.sign(job2.ts - job1.ts) : retVal;
+    retVal = retVal === 0 ? Math.sign(job1.depth - job2.depth) : retVal;
     return retVal;
   });
 
   landingURLs.map((url) => jobQueue.push({
     priority: 1000,
-    ts: new Date().getTime(),
-    steps: [],
-    url,
+    depth: 0,
+    steps: [{ action: ['goto', url] }],
   }));
 
   // Stealth plugin - not sure if it actually helps but why not
@@ -342,25 +384,25 @@ function markNewClickableElements(args: string[]) {
   // Main loop
   while (jobCount < maxJobCount && jobQueue.size > 0) {
     const context = await browser.newContext({
-      locale: "en-US",
-      timezoneId: "America/Los_Angeles",
-      serviceWorkers: "block",
+      locale: 'en-US',
+      timezoneId: 'America/Los_Angeles',
+      serviceWorkers: 'block',
     });
     context.setDefaultTimeout(10000);
     const page = await context.newPage();
 
     // Enable ad blocker to reduce noise
-    await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then((blocker) => {
-      blocker.enableBlockingInPage(page);
+    await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then(async (blocker) => {
+      await blocker.enableBlockingInPage(page);
     });
 
-    jobCount++;
+    jobCount += 1;
 
     const job = jobQueue.pop()!;
     console.log('Current job: ', JSON.stringify(job, null, 2));
 
     try {
-      await recoverPageState(page, job.url, job.steps);
+      await doSteps(page, job.steps);
     } catch (e) {
       if (e instanceof PageStateError || e instanceof PlaywrightErrors.TimeoutError) {
         console.log('Failed to recover page state:', e.message);
@@ -374,39 +416,23 @@ function markNewClickableElements(args: string[]) {
     console.log('Checking forms...');
     await checkForms(page);
 
-    page.evaluate(markNewClickableElements, [DOM_VISITED_ATTR, "next"]);
+    const possibleNextSteps = await page.evaluate(findNextSteps, [DOM_VISITED_ATTR, 'next']);
     let newJobCount = 0;
 
-    for (const element of await page.locator(`[${DOM_VISITED_ATTR}="next"]`).all()) {
-      let attributes: ElementAttributes;
+    for (const step of possibleNextSteps) {
+      const reward = estimateReward(step);
+      const newSteps = buildSteps(job.steps, step);
 
-      try {
-        attributes = await getElementAttributes(element);
-      } catch (e) {
-        if (e instanceof PlaywrightErrors.TimeoutError) {
-          continue;
-        } else {
-          throw e;
-        }
-      }
-
-      const clickReward = estimateClickReward(attributes);
-
-      if (clickReward > 0) {
-        newJobCount += 1;
-        const newSteps = job.steps.slice();
-
-        newSteps.push(attributes);
-
+      if (reward > 0 && !!newSteps) {
         const newJobDesc = {
-          priority: clickReward,
-          ts: new Date().getTime(),
+          priority: reward,
+          depth: job.depth + 1,
           steps: newSteps,
-          url: job.url,
         };
 
         // console.log('Enqueue new job:', JSON.stringify(newJobDesc, null, 2));
 
+        newJobCount += 1;
         jobQueue.push(newJobDesc);
       }
     }
