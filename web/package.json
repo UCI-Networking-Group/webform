@@ -1,5 +1,9 @@
 {
   "type": "module",
+  "scripts": {
+    "compile": "tsc",
+    "crawler": "node build/crawler.js"
+  },
   "dependencies": {
     "@cliqz/adblocker-playwright": "^1.26.8",
     "@playwright/browser-chromium": "^1.38.1",

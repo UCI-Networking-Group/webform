@@ -1,11 +1,15 @@
+import process from 'node:process';
+import assert from 'node:assert/strict';
+
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
-import process from 'node:process';
-import assert from 'node:assert/strict';
 import mnemonist from 'mnemonist';
 import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
-import { parseDomain, ParseResultType } from 'parse-domain';
+
+import { StepSpec, JobSpec } from './types.js';
+import { URLPlus, hashObjectSha256 } from './utils.js';
+import { findNextSteps } from './page-functions.js';
 
 /**
  * TODO List:
@@ -15,18 +19,6 @@ import { parseDomain, ParseResultType } from 'parse-domain';
  */
 
 const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
-
-class URLPlus extends URL {
-  get effectiveDomain(): string {
-    const parsed = parseDomain(this.hostname);
-
-    if (parsed.type === ParseResultType.Listed) {
-      return parsed.domain + '.' + parsed.topLevelDomains.join('.');
-    }
-
-    return this.hostname;
-  }
-}
 
 /**
  * Guess the type of a form
@@ -97,16 +89,6 @@ async function checkFieldType(formLocator: Locator, fieldLocator: Locator): Prom
   return 'UNKNOWN';
 }
 
-interface StepSpec {
-  action: ['goto' | 'click', ...string[]],
-  origin?: {
-    location: string,
-    tagName: string,
-    textContent: string,
-    attributes: { [key: string]: string },
-  },
-}
-
 /**
  * Estimate the reward of clicking an element
  */
@@ -168,59 +150,6 @@ async function waitForLoading(page: Page, timeout: number = 30000) {
   const nextTimeout = Math.max(timeout - (performance.now() - tstart), 1);
   // At minimum, wait for DOMContentLoaded event -- should return immediately if already there
   await page.waitForLoadState('domcontentloaded', { timeout: nextTimeout });
-}
-
-function findNextSteps(args: string[]): StepSpec[] {
-  const [markAttr, markValue] = args as [string, string];
-
-  // Ref: https://gist.github.com/iiLaurens/81b1b47f6259485c93ce6f0cdd17490a
-  let clickableElements: Element[] = [];
-
-  for (const element of document.body.querySelectorAll('*')) {
-    // Skip already marked elements
-    if (element.hasAttribute(markAttr)) continue;
-
-    // Skip disabled elements
-    if (element.ariaDisabled === 'true') continue;
-    // But do not skip hidden elements because we may still want to click on them
-
-    if (!!(element as HTMLElement).onclick
-        || ['link', 'button'].includes(element.role || '')
-        || ['A', 'BUTTON'].includes(element.tagName)) {
-      element.setAttribute(markAttr, markValue);
-      clickableElements.push(element);
-    }
-  }
-
-  // Only keep inner clickable items
-  clickableElements = clickableElements.filter((x) => !clickableElements.some((y) => x.contains(y) && x !== y));
-
-  const possibleSteps: StepSpec[] = [];
-
-  for (const element of clickableElements) {
-    const origin = {
-      location: window.location.href,
-      tagName: element.tagName,
-      attributes: [...element.attributes].reduce((o, a) => Object.assign(o, { [a.name]: a.value }), {}),
-      textContent: element.textContent || '',
-    };
-
-    if (element instanceof HTMLAnchorElement && element.onclick === null && !!element.href.match(/^https?:/)) {
-      // A pure anchor element
-      possibleSteps.push({
-        action: ['goto', element.href],
-        origin,
-      });
-    } else {
-      // Something else that is clickable
-      possibleSteps.push({
-        action: ['click'],
-        origin,
-      });
-    }
-  }
-
-  return possibleSteps;
 }
 
 async function doSteps(page: Page, steps: StepSpec[]) {
@@ -356,12 +285,6 @@ await (async () => {
   const maxJobCount = 100;
   const landingURLs = process.argv.slice(2);
 
-  interface JobSpec {
-    priority: number,
-    depth: number,
-    steps: StepSpec[],
-  }
-
   const jobQueue = new mnemonist.Heap<JobSpec>((job1, job2) => {
     let retVal = Math.sign(job2.priority - job1.priority);
     retVal = retVal === 0 ? Math.sign(job1.depth - job2.depth) : retVal;
@@ -379,6 +302,7 @@ await (async () => {
 
   // Initialize the browser
   const browser = await chromium.launch();
+  const triedJobs = new Set<string>();
   let jobCount = 0;
 
   // Main loop
@@ -389,6 +313,7 @@ await (async () => {
       serviceWorkers: 'block',
     });
     context.setDefaultTimeout(10000);
+    await context.exposeFunction('hashObjectSha256', hashObjectSha256);
     const page = await context.newPage();
 
     // Enable ad blocker to reduce noise
@@ -396,10 +321,17 @@ await (async () => {
       await blocker.enableBlockingInPage(page);
     });
 
-    jobCount += 1;
-
     const job = jobQueue.pop()!;
     console.log('Current job: ', JSON.stringify(job, null, 2));
+
+    const jobHash = await hashObjectSha256(job.steps.map((s) => s.action));
+    if (triedJobs.has(jobHash)) {
+      console.log('Skipping job because it has been tried before');
+      continue;
+    }
+
+    triedJobs.add(jobHash);
+    jobCount += 1;
 
     try {
       await doSteps(page, job.steps);
