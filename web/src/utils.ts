@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { parseDomain, ParseResultType } from 'parse-domain';
+import { ElementHandle } from 'playwright';
 
 /**
  * Hash an object using SHA256
  */
-export async function hashObjectSha256(object: any): Promise<string> {
+export function hashObjectSha256(object: any): string {
   return createHash('sha256').update(JSON.stringify(object)).digest('hex');
 }
 
@@ -21,4 +22,11 @@ export class URLPlus extends URL {
 
     return this.hostname;
   }
+}
+
+/**
+ * Check if an element is visible, using Playwright API
+ */
+export async function isElementVisible(_source: any, elementHandle: ElementHandle): Promise<boolean> {
+  return elementHandle.isVisible();
 }

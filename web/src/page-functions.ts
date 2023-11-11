@@ -1,41 +1,59 @@
 import {
   StepSpec, ElementInformation, WebFormField, WebForm,
 } from './types.js';
-import { hashObjectSha256 } from './utils.js';
 
 export async function getFormInformation(formElement: HTMLFormElement): Promise<WebForm> {
-  function fetchElementInformation(element: HTMLElement): ElementInformation {
+  async function getElementInformation(element: Element): Promise<ElementInformation> {
     return {
       outerHTML: element.outerHTML,
       tagName: element.tagName,
       attributes: [...element.attributes].reduce((o, a) => Object.assign(o, { [a.name]: a.value }), {}),
-      text: element.innerText.trim(),
+      text: element instanceof HTMLElement ? element.innerText.trim() : '',
+      isVisible: await (window as any).isElementVisible(formElement),
     };
   }
 
   const formData = new FormData(formElement);
   const formInfo: WebForm = {
-    defaultFormData: {},
-    element: fetchElementInformation(formElement),
+    defaultFormData: Object.fromEntries([...formData].map((o) => [o[0], o[1].toString()])),
+    element: await getElementInformation(formElement),
     fields: [],
+    buttons: [],
   };
 
-  for (const [key, defaultValue] of formData.entries()) {
-    formInfo.defaultFormData[key] = defaultValue.toString();
-    const allNodes = formElement.querySelectorAll(`[name="${key}"]`);
+  for (const childElement of formElement.elements) {
+    // A button
+    if (childElement instanceof HTMLButtonElement
+        || (childElement instanceof HTMLInputElement && childElement.type === 'submit')
+        || (childElement.role === 'button')) {
+      formInfo.buttons.push(await getElementInformation(childElement));
+      continue;
+    }
 
-    for (const fieldElement of allNodes) {
-      const fieldInfo: WebFormField = {
-        name: key,
-        fieldElement: fetchElementInformation(fieldElement as HTMLElement),
-        labelElement: null,
-      };
-      formInfo.fields.push(fieldInfo);
+    // A general form field
+    const fieldInfo: WebFormField = {
+      name: (childElement as HTMLInputElement).name || null,
+      fieldElement: await getElementInformation(childElement),
+    };
 
-      // Find the label associated with the input element
-      if (fieldElement.id.match(/^[-A-Za-z0-9_]+$/) !== null) {
-        const e: HTMLElement | null = formElement.querySelector(`label[for="${fieldElement.id}"]`);
-        if (e !== null) fieldInfo.labelElement = fetchElementInformation(e);
+    formInfo.fields.push(fieldInfo);
+
+    // Find the label associated with the input element
+    if (childElement.id) {
+      const e: HTMLElement | null = formElement.querySelector(`label[for="${childElement.id}"]`);
+      if (e !== null) fieldInfo.labelElement = await getElementInformation(e);
+    }
+
+    // If no label, provide the previous (visible) element as a hint
+    if (fieldInfo.labelElement === undefined) {
+      for (let e: Element | null = childElement; e !== null;) {
+        e = e?.previousElementSibling || e?.parentElement?.previousElementSibling || null;
+
+        if (e instanceof HTMLElement && formElement.contains(e)
+            && !Array.prototype.some.call(formElement.elements, (o) => e?.contains(o))
+            && (window as any).isElementVisible) {
+          fieldInfo.previousElement = await getElementInformation(e);
+        }
       }
     }
   }
@@ -93,7 +111,7 @@ export async function findNextSteps(markAttr: string): Promise<StepSpec[]> {
     } else {
       // Something else that is clickable
       possibleSteps.push({
-        action: ['click', await hashObjectSha256(origin)],
+        action: ['click', await (window as any).hashObjectSha256(origin)],
         origin,
       });
     }

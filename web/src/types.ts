@@ -1,17 +1,17 @@
 export interface StepSpec {
-  action: ['goto' | 'click', ...string[]],
+  action: ['goto' | 'click', ...string[]];
   origin?: {
-    location: string,
-    tagName: string,
-    textContent: string,
-    attributes: { [key: string]: string },
-  },
+    location: string;
+    tagName: string;
+    textContent: string;
+    attributes: { [key: string]: string };
+  };
 }
 
 export interface JobSpec {
-  priority: number,
-  parents: string[],
-  steps: StepSpec[],
+  priority: number;
+  parents: string[];
+  steps: StepSpec[];
 }
 
 export interface ElementInformation {
@@ -19,16 +19,19 @@ export interface ElementInformation {
   tagName: string;
   attributes: { [key: string]: string };
   text: string;
+  isVisible: boolean;
 }
 
 export interface WebFormField {
-  name: string;
+  name: string | null;
   fieldElement: ElementInformation;
-  labelElement: ElementInformation | null;
+  labelElement?: ElementInformation;
+  previousElement?: ElementInformation;
 }
 
 export interface WebForm {
   defaultFormData: { [key: string]: string };
   element: ElementInformation;
   fields: WebFormField[];
+  buttons: ElementInformation[];
 }

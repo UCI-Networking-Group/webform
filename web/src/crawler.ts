@@ -10,7 +10,7 @@ import mnemonist from 'mnemonist';
 import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
 
 import { StepSpec, JobSpec } from './types.js';
-import { URLPlus, hashObjectSha256 } from './utils.js';
+import { URLPlus, hashObjectSha256, isElementVisible } from './utils.js';
 import { findNextSteps, markInterestingElements, getFormInformation } from './page-functions.js';
 
 /**
@@ -189,16 +189,6 @@ async function checkForms(page: Page, outDir: string) {
       JSON.stringify(formInfo, null, 2),
     );
     console.log(`Web form #${formIndex} saved`);
-    // const formType = await checkFormType(form);
-
-    // console.log(`FORM TYPE: ${formType}`);
-
-    // for (const inputField of await form.locator('input').all()) {
-    //   if (await inputField.isVisible()) {
-    //     const fieldType = await checkFieldType(form, inputField);
-    //     console.log(`- FIELD TYPE: ${fieldType}`);
-    //   }
-    // }
   }
 }
 
@@ -257,6 +247,8 @@ await (async () => {
     });
     context.setDefaultTimeout(10000);
     await context.exposeFunction('hashObjectSha256', hashObjectSha256);
+    await context.exposeBinding('isElementVisible', isElementVisible, { handle: true });
+
     const page = await context.newPage();
 
     // Enable ad blocker to reduce noise
@@ -267,12 +259,13 @@ await (async () => {
     const job = jobQueue.pop()!;
     console.log('Current job: ', job);
 
-    const jobHash = await hashObjectSha256(job.steps.map((s) => s.action));
+    const jobHash = hashObjectSha256(job.steps.map((s) => s.action));
     if (triedJobs.has(jobHash)) {
       console.log('Skipping job because it has been tried before');
       continue;
     }
 
+    console.log(`Job ${jobHash} started`);
     triedJobs.add(jobHash);
     jobCount += 1;
 
@@ -295,18 +288,19 @@ await (async () => {
     }
 
     // Dump some information for later inspection
-    await fsPromises.writeFile(
-      path.join(jobOutDir, 'job.json'),
-      JSON.stringify({ jobHash, ...job, navigationHistory }, null, 2),
-    );
+    const pageHTML = await page.content();
+    await fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML);
 
     await page.screenshot({
       path: path.join(jobOutDir, 'page.png'),
       fullPage: true,
     });
 
-    const pageHTML = await page.content();
-    await fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML);
+    const pageTitle = await page.title();
+    await fsPromises.writeFile(
+      path.join(jobOutDir, 'job.json'),
+      JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory }, null, 2),
+    );
 
     // Search the webpage for forms
     console.log('Checking forms...');
@@ -326,15 +320,12 @@ await (async () => {
           steps: newSteps,
         };
 
-        // console.log('Enqueue new job:', JSON.stringify(newJobDesc, null, 2));
-
         newJobCount += 1;
         jobQueue.push(newJobDesc);
       }
     }
 
-    console.log('New jobs:', newJobCount);
-    console.log('Job queue size:', jobQueue.size);
+    console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
 
     await page.waitForTimeout(2000); // For now, avoid running too fast
     await page.close();
