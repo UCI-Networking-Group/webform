@@ -1,5 +1,7 @@
 import process from 'node:process';
 import assert from 'node:assert/strict';
+import * as fsPromises from 'node:fs/promises';
+import path from 'node:path';
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -9,7 +11,7 @@ import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
 
 import { StepSpec, JobSpec } from './types.js';
 import { URLPlus, hashObjectSha256 } from './utils.js';
-import { findNextSteps } from './page-functions.js';
+import { findNextSteps, markInterestingElements, getFormInformation } from './page-functions.js';
 
 /**
  * TODO List:
@@ -19,75 +21,6 @@ import { findNextSteps } from './page-functions.js';
  */
 
 const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
-
-/**
- * Guess the type of a form
- */
-async function checkFormType(locator: Locator): Promise<string | null> {
-  for (const elem of await locator.locator('[type=submit]').all()) {
-    const textContent = await elem.textContent() || '';
-
-    if (textContent.search(/\bsign\s*up\b/gi) >= 0) {
-      return 'SIGN_UP';
-    } if (textContent.search(/\b(sign|log)\s*(in|on)\b/gi) >= 0) {
-      return 'LOGIN';
-    }
-  }
-
-  return null;
-}
-
-/**
- * Guess the type of a field in a form
- */
-async function checkFieldType(formLocator: Locator, fieldLocator: Locator): Promise<string> {
-  // TODO:
-  //   - more than one types ("Email or phone number")
-  //   - check field label
-
-  const testStrings: string[] = [];
-
-  const placeholder = await fieldLocator.evaluate((node) => (node as HTMLInputElement).placeholder);
-  const fieldName = await fieldLocator.evaluate((node) => (node as HTMLInputElement).name);
-  const ariaLabel = await fieldLocator.evaluate((node) => node.getAttribute('aria-label'));
-  const fieldId = await fieldLocator.evaluate((node) => node.id);
-  const labelElement = formLocator.locator(`label[for="${fieldId}"]`);
-
-  if (placeholder) testStrings.push(placeholder);
-  if (fieldName) testStrings.push(fieldName.replaceAll('_', ' '));
-  if (ariaLabel) testStrings.push(ariaLabel);
-
-  if (await labelElement.count() > 0) {
-    const labelText = await labelElement.textContent();
-    if (labelText) testStrings.push(labelText);
-  }
-
-  console.log(testStrings);
-
-  for (const s of testStrings) {
-    if (s.search(/\be-?mail\b/gi) >= 0) {
-      return 'EMAIL';
-    } if (s.search(/\b(mobile|(tele)?phone)\s*number\b/gi) >= 0) {
-      return 'PHONE_NUMBER';
-    } if (s.search(/\bpassword\b/gi) >= 0) {
-      return 'PASSWORD';
-    } if (s.search(/\b(first|last|full|real)\s*name\b/gi) >= 0) {
-      return 'PERSON_NAME';
-    } if (s.search(/\b(sex|gender)\b/gi) >= 0) {
-      return 'GENDER';
-    } if (s.search(/\b(birth\s*day|date\s+of\s+birth)\b/gi) >= 0) {
-      return 'BIRTHDAY';
-    } if (s.search(/\baddress\s+line\b/gi) >= 0) {
-      return 'PHYSICAL_ADDRESS';
-    } if (s.search(/\b(zip|postal)\s*code\b/gi) >= 0) {
-      return 'POSTAL_CODE';
-    } if (s.search(/\buser\s*(name|id)\b/gi) >= 0) {
-      return 'USERNAME';
-    }
-  }
-
-  return 'UNKNOWN';
-}
 
 /**
  * Estimate the reward of clicking an element
@@ -152,7 +85,7 @@ async function waitForLoading(page: Page, timeout: number = 30000) {
   await page.waitForLoadState('domcontentloaded', { timeout: nextTimeout });
 }
 
-async function doSteps(page: Page, steps: StepSpec[]) {
+async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]> {
   const history: (string | null)[] = [];
   let hasNavigated = false;
 
@@ -195,7 +128,7 @@ async function doSteps(page: Page, steps: StepSpec[]) {
 
     if (index + 1 === steps.length) {
       // Before the last step, mark elements generated in previous steps
-      await page.evaluate(findNextSteps, [DOM_VISITED_ATTR, 'old']);
+      await page.evaluate(markInterestingElements, DOM_VISITED_ATTR);
     }
 
     const beforeUrl = page.url();
@@ -233,31 +166,39 @@ async function doSteps(page: Page, steps: StepSpec[]) {
   page.off('domcontentloaded', navigationHandler);
 
   console.log('Successfully recovered page state. URL:', page.url());
+
+  return history;
 }
 
-async function checkForms(page: Page) {
-  for (const form of await page.locator('form').all()) {
-    if (await form.evaluate((e, attrName) => e.hasAttribute(attrName), DOM_VISITED_ATTR)) {
-      // Skip because the element has been tried
-      continue;
-    }
+async function checkForms(page: Page, outDir: string) {
+  let formIndex = 0;
+
+  for (const form of await page.locator(`form:not([${DOM_VISITED_ATTR}])`).all()) {
+    formIndex += 1;
 
     try {
-      await form.scrollIntoViewIfNeeded();
+      // await form.scrollIntoViewIfNeeded();
+      await form.screenshot({ path: path.join(outDir, `form-${formIndex}.png`) });
     } catch (e) {
-      console.warn(e);
-      continue;
+      console.warn('Cannot scroll the form into view and take screenshot');
     }
-    const formType = await checkFormType(form);
 
-    console.log(`FORM TYPE: ${formType}`);
+    const formInfo = await form.evaluate(getFormInformation);
+    await fsPromises.writeFile(
+      path.join(outDir, `form-${formIndex}.json`),
+      JSON.stringify(formInfo, null, 2),
+    );
+    console.log(`Web form #${formIndex} saved`);
+    // const formType = await checkFormType(form);
 
-    for (const inputField of await form.locator('input').all()) {
-      if (await inputField.isVisible()) {
-        const fieldType = await checkFieldType(form, inputField);
-        console.log(`- FIELD TYPE: ${fieldType}`);
-      }
-    }
+    // console.log(`FORM TYPE: ${formType}`);
+
+    // for (const inputField of await form.locator('input').all()) {
+    //   if (await inputField.isVisible()) {
+    //     const fieldType = await checkFieldType(form, inputField);
+    //     console.log(`- FIELD TYPE: ${fieldType}`);
+    //   }
+    // }
   }
 }
 
@@ -283,17 +224,17 @@ function buildSteps(steps: StepSpec[], nextStep: StepSpec): StepSpec[] | null {
 
 await (async () => {
   const maxJobCount = 100;
-  const landingURLs = process.argv.slice(2);
+  const [outDir, ...landingURLs] = process.argv.slice(2);
 
   const jobQueue = new mnemonist.Heap<JobSpec>((job1, job2) => {
     let retVal = Math.sign(job2.priority - job1.priority);
-    retVal = retVal === 0 ? Math.sign(job1.depth - job2.depth) : retVal;
+    retVal = retVal === 0 ? Math.sign(job1.parents.length - job2.parents.length) : retVal;
     return retVal;
   });
 
-  landingURLs.map((url) => jobQueue.push({
+  landingURLs.forEach((url) => jobQueue.push({
     priority: 1000,
-    depth: 0,
+    parents: [],
     steps: [{ action: ['goto', url] }],
   }));
 
@@ -304,6 +245,8 @@ await (async () => {
   const browser = await chromium.launch();
   const triedJobs = new Set<string>();
   let jobCount = 0;
+
+  await fsPromises.mkdir(outDir);
 
   // Main loop
   while (jobCount < maxJobCount && jobQueue.size > 0) {
@@ -322,7 +265,7 @@ await (async () => {
     });
 
     const job = jobQueue.pop()!;
-    console.log('Current job: ', JSON.stringify(job, null, 2));
+    console.log('Current job: ', job);
 
     const jobHash = await hashObjectSha256(job.steps.map((s) => s.action));
     if (triedJobs.has(jobHash)) {
@@ -333,10 +276,17 @@ await (async () => {
     triedJobs.add(jobHash);
     jobCount += 1;
 
+    const jobOutDir = path.join(outDir, jobHash);
+    await fsPromises.mkdir(jobOutDir);
+
+    let navigationHistory: (string | null)[] = [];
+
     try {
-      await doSteps(page, job.steps);
+      navigationHistory = await doSteps(page, job.steps);
     } catch (e) {
-      if (e instanceof PageStateError || e instanceof PlaywrightErrors.TimeoutError) {
+      if (e instanceof PageStateError
+          || e instanceof PlaywrightErrors.TimeoutError
+          || (e instanceof Error && e.message.startsWith('page.goto: net::ERR_ABORTED '))) {
         console.log('Failed to recover page state:', e.message);
         continue;
       } else {
@@ -344,11 +294,25 @@ await (async () => {
       }
     }
 
+    // Dump some information for later inspection
+    await fsPromises.writeFile(
+      path.join(jobOutDir, 'job.json'),
+      JSON.stringify({ jobHash, ...job, navigationHistory }, null, 2),
+    );
+
+    await page.screenshot({
+      path: path.join(jobOutDir, 'page.png'),
+      fullPage: true,
+    });
+
+    const pageHTML = await page.content();
+    await fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML);
+
     // Search the webpage for forms
     console.log('Checking forms...');
-    await checkForms(page);
+    await checkForms(page, jobOutDir);
 
-    const possibleNextSteps = await page.evaluate(findNextSteps, [DOM_VISITED_ATTR, 'next']);
+    const possibleNextSteps = await page.evaluate(findNextSteps, DOM_VISITED_ATTR);
     let newJobCount = 0;
 
     for (const step of possibleNextSteps) {
@@ -358,7 +322,7 @@ await (async () => {
       if (reward > 0 && !!newSteps) {
         const newJobDesc = {
           priority: reward,
-          depth: job.depth + 1,
+          parents: [...job.parents, jobHash],
           steps: newSteps,
         };
 
