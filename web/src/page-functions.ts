@@ -1,6 +1,64 @@
+/* eslint-disable func-names */
+
 import {
   StepSpec, ElementInformation, WebFormField, WebForm,
 } from './types.js';
+
+export function initFunction() {
+  const calledSpecialAPIs: { [key: string]: boolean } = {};
+  (window as any).calledSpecialAPIs = calledSpecialAPIs;
+
+  // Geolocation
+  const { watchPosition, getCurrentPosition } = window.navigator.geolocation;
+
+  window.navigator.geolocation.watchPosition = function (...args) {
+    calledSpecialAPIs['geolocation.watchPostion'] = true;
+    return watchPosition.apply(this, args);
+  };
+
+  window.navigator.geolocation.getCurrentPosition = function (...args) {
+    calledSpecialAPIs['geolocation.getCurrentPosition'] = true;
+    return getCurrentPosition.apply(this, args);
+  };
+
+  // Motion sensors through window.addEventListener
+  const { addEventListener } = window;
+
+  window.addEventListener = function (...args: any[]) {
+    const eventName = args[0];
+
+    if (['devicemotion', 'deviceorientation', 'deviceorientationabsolute'].includes(eventName)) {
+      calledSpecialAPIs[`eventListener:${eventName}`] = true;
+    }
+
+    return addEventListener.apply(this, args as any);
+  };
+
+  // Sensors
+  if ('Sensor' in window) {
+    const { start } = (window as any).Sensor.prototype;
+
+    (window as any).Sensor.prototype.start = function (...args: any[]) {
+      calledSpecialAPIs[`${this.constructor.name}.start`] = true;
+      return start.apply(this, args);
+    };
+  }
+
+  // Camera, microphone and screen capture
+  const { getUserMedia, getDisplayMedia } = window.MediaDevices.prototype;
+
+  window.MediaDevices.prototype.getUserMedia = function (...args) {
+    if (args[0]?.audio) calledSpecialAPIs['MediaDevices.getUserMedia:audio'] = true;
+    if (args[0]?.video) calledSpecialAPIs['MediaDevices.getUserMedia:video'] = true;
+    return getUserMedia.apply(this, args);
+  };
+
+  window.MediaDevices.prototype.getDisplayMedia = function (...args) {
+    if (args[0]?.audio) calledSpecialAPIs['MediaDevices.getDisplayMedia:audio'] = true;
+    if (args[0]?.video) calledSpecialAPIs['MediaDevices.getDisplayMedia:video'] = true;
+    return getDisplayMedia.apply(this, args);
+  };
+}
 
 export async function getFormInformation(formElement: HTMLFormElement): Promise<WebForm> {
   async function getElementInformation(element: Element): Promise<ElementInformation> {

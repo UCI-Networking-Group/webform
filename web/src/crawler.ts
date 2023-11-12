@@ -11,7 +11,7 @@ import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
 
 import { StepSpec, JobSpec } from './types.js';
 import { URLPlus, hashObjectSha256, isElementVisible } from './utils.js';
-import { findNextSteps, markInterestingElements, getFormInformation } from './page-functions.js';
+import { findNextSteps, markInterestingElements, getFormInformation, initFunction } from './page-functions.js';
 
 /**
  * TODO List:
@@ -244,8 +244,16 @@ await (async () => {
       locale: 'en-US',
       timezoneId: 'America/Los_Angeles',
       serviceWorkers: 'block',
+      geolocation: { latitude: 38.581667, longitude: -121.494444 },
+      permissions: [
+        'geolocation',
+        'camera', 'microphone',
+        'ambient-light-sensor', 'accelerometer', 'gyroscope', 'magnetometer',
+      ],
     });
     context.setDefaultTimeout(10000);
+    await context.grantPermissions(['geolocation']);
+    await context.addInitScript(initFunction);
     await context.exposeFunction('hashObjectSha256', hashObjectSha256);
     await context.exposeBinding('isElementVisible', isElementVisible, { handle: true });
 
@@ -297,9 +305,11 @@ await (async () => {
     });
 
     const pageTitle = await page.title();
+    const calledSpecialAPIs = await page.evaluate(() => (window as any).calledSpecialAPIs);
+
     await fsPromises.writeFile(
       path.join(jobOutDir, 'job.json'),
-      JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory }, null, 2),
+      JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
     );
 
     // Search the webpage for forms
