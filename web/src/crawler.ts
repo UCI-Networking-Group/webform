@@ -46,6 +46,7 @@ async function locateOriginElement(page: Page, step: StepSpec): Promise<Locator 
   const id = step.origin?.attributes.id || '';
 
   if (id.match(/^[-A-Za-z0-9_]+$/) !== null) {
+    // TODO: 'A#8z9zk7-accordion-label' is not a valid selector
     const locator = page.locator(`${tagName}#${id}`);
     if ((await locator.count()) > 0) return locator.first();
   }
@@ -180,7 +181,7 @@ async function checkForms(page: Page, outDir: string) {
       // await form.scrollIntoViewIfNeeded();
       await form.screenshot({ path: path.join(outDir, `form-${formIndex}.png`) });
     } catch (e) {
-      console.warn('Cannot scroll the form into view and take screenshot');
+      console.warn('Cannot take screenshot for the form');
     }
 
     const formInfo = await form.evaluate(getFormInformation);
@@ -252,7 +253,6 @@ await (async () => {
       ],
     });
     context.setDefaultTimeout(10000);
-    await context.grantPermissions(['geolocation']);
     await context.addInitScript(initFunction);
     await context.exposeFunction('hashObjectSha256', hashObjectSha256);
     await context.exposeBinding('isElementVisible', isElementVisible, { handle: true });
@@ -264,80 +264,93 @@ await (async () => {
       await blocker.enableBlockingInPage(page);
     });
 
-    const job = jobQueue.pop()!;
-    console.log('Current job: ', job);
+    do {
+      const job = jobQueue.pop()!;
+      const jobHash = hashObjectSha256(job.steps.map((s) => s.action));
 
-    const jobHash = hashObjectSha256(job.steps.map((s) => s.action));
-    if (triedJobs.has(jobHash)) {
-      console.log('Skipping job because it has been tried before');
-      continue;
-    }
+      if (triedJobs.has(jobHash)) {
+        console.log('Skipping job because it has been tried before');
+        break;
+      }
 
-    console.log(`Job ${jobHash} started`);
-    triedJobs.add(jobHash);
-    jobCount += 1;
+      console.log('Current job: ', job);
+      console.log(`Job ${jobHash} started`);
+      triedJobs.add(jobHash);
+      jobCount += 1;
 
-    const jobOutDir = path.join(outDir, jobHash);
-    await fsPromises.mkdir(jobOutDir);
+      // Do the steps
+      let navigationHistory: (string | null)[] = [];
 
-    let navigationHistory: (string | null)[] = [];
+      try {
+        navigationHistory = await doSteps(page, job.steps);
+      } catch (e) {
+        if (e instanceof PageStateError
+            || e instanceof PlaywrightErrors.TimeoutError
+            || (e instanceof Error && e.message.startsWith('page.goto: net::ERR_ABORTED '))) {
+          // TODO: Should we catch all errors?
+          // e.g., "page.goto: net::ERR_NAME_NOT_RESOLVED"
+          //       "page.goto: net::ERR_CONNECTION_REFUSED"
+          //       "locator.click: Target closed"
+          console.log('Failed to recover page state:', e.message);
+          break;
+        }
 
-    try {
-      navigationHistory = await doSteps(page, job.steps);
-    } catch (e) {
-      if (e instanceof PageStateError
-          || e instanceof PlaywrightErrors.TimeoutError
-          || (e instanceof Error && e.message.startsWith('page.goto: net::ERR_ABORTED '))) {
-        console.log('Failed to recover page state:', e.message);
-        continue;
-      } else {
         throw e;
       }
-    }
 
-    // Dump some information for later inspection
-    const pageHTML = await page.content();
-    await fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML);
+      // Dump job information for later inspection
+      const jobOutDir = path.join(outDir, jobHash);
 
-    await page.screenshot({
-      path: path.join(jobOutDir, 'page.png'),
-      fullPage: true,
-    });
+      try {
+        const pageHTML = await page.content();
+        const pageTitle = await page.title();
+        const calledSpecialAPIs = await page.evaluate(() => (window as any).calledSpecialAPIs);
+        const screenshot = await page.screenshot({ fullPage: true });
 
-    const pageTitle = await page.title();
-    const calledSpecialAPIs = await page.evaluate(() => (window as any).calledSpecialAPIs);
+        await fsPromises.mkdir(jobOutDir);
+        await fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML);
+        await fsPromises.writeFile(path.join(jobOutDir, 'page.png'), screenshot);
+        await fsPromises.writeFile(
+          path.join(jobOutDir, 'job.json'),
+          JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
+        );
+      } catch (e) {
+        if (e instanceof Error) {
+          console.log('Failed to save job information:', e.message);
+          break;
+        }
 
-    await fsPromises.writeFile(
-      path.join(jobOutDir, 'job.json'),
-      JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
-    );
-
-    // Search the webpage for forms
-    console.log('Checking forms...');
-    await checkForms(page, jobOutDir);
-
-    const possibleNextSteps = await page.evaluate(findNextSteps, DOM_VISITED_ATTR);
-    let newJobCount = 0;
-
-    for (const step of possibleNextSteps) {
-      const reward = estimateReward(step);
-      const newSteps = buildSteps(job.steps, step);
-
-      if (reward > 0 && !!newSteps) {
-        const newJobDesc = {
-          priority: reward,
-          parents: [...job.parents, jobHash],
-          steps: newSteps,
-        };
-
-        newJobCount += 1;
-        jobQueue.push(newJobDesc);
+        throw e;
       }
-    }
 
-    console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
+      // Search the webpage for forms
+      console.log('Checking forms...');
+      await checkForms(page, jobOutDir); // TODO: Check exceptions
 
-    await page.waitForTimeout(2000); // For now, avoid running too fast
+      // Find possible next steps
+      const possibleNextSteps = await page.evaluate(findNextSteps, DOM_VISITED_ATTR);
+      let newJobCount = 0;
+
+      for (const step of possibleNextSteps) {
+        const reward = estimateReward(step);
+        const newSteps = buildSteps(job.steps, step);
+
+        if (reward > 0 && !!newSteps) {
+          jobQueue.push({
+            priority: reward,
+            parents: [...job.parents, jobHash],
+            steps: newSteps,
+          });
+
+          newJobCount += 1;
+        }
+      }
+
+      console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
+    // eslint-disable-next-line no-constant-condition
+    } while (false);
+
+    await page.waitForTimeout(2000); // Avoid running too fast
     await page.close();
     await context.close();
   }
