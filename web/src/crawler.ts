@@ -12,6 +12,7 @@ import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
 import { StepSpec, JobSpec } from './types.js';
 import { URLPlus, hashObjectSha256, isElementVisible } from './utils.js';
 import { findNextSteps, markInterestingElements, getFormInformation, initFunction } from './page-functions.js';
+import { estimateReward } from './reward.js';
 
 /**
  * TODO List:
@@ -21,20 +22,6 @@ import { findNextSteps, markInterestingElements, getFormInformation, initFunctio
  */
 
 const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
-
-/**
- * Estimate the reward of clicking an element
- */
-function estimateReward(step: StepSpec): number {
-  // TODO: In the future, a text classifier can be used.
-  const text = step?.origin?.textContent.trim() || '';
-
-  if (text.search(/\b(sign\s*(up|in|on)|creates?|forgot|resets?|registers?|new|enrolls?|log\s*(in|on)|settings?|joins?|subscribes?|inquiry|contacts?)\b/gi) >= 0) {
-    return 500;
-  }
-
-  return 1;
-}
 
 /**
  * Locate the element that match the given attributes
@@ -332,7 +319,7 @@ await (async () => {
       let newJobCount = 0;
 
       for (const step of possibleNextSteps) {
-        const reward = estimateReward(step);
+        const reward = await estimateReward(step);
         const newSteps = buildSteps(job.steps, step);
 
         if (reward > 0 && !!newSteps) {
