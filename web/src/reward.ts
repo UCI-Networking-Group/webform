@@ -3,63 +3,63 @@ import * as use from '@tensorflow-models/universal-sentence-encoder';
 import { StepSpec } from './types.js';
 
 const SEED_PHRASES = `
-login
-log in
-sign up
-sign on
-sign in
-use phone or email
-join
-enroll
-enroll in online Banking
-subscribe
-subscribe now
-register
-register now
-settings
-free trail
-contact us
-contact sales
-feedback
+12 months free
+account profile
 apply
 apply now
-create account
-my account
-watch now
+business account
 buy
 buy now
-register for an account
-register here
 contact center
-support center
-order now
-download
-download now
-customer service
-register a credit card
-12 months free
-request a demo
-get started
-account profile
-see plans and pricing
-business account
-create free account
-managing my account
-opening my account
-new account
-new customer
-subscribe today
-use phone or email
+contact sales
+contact us
 continue with email
 continue your quote
-sign on to mobile banking
-reset password
-inquiry
-schedule an appointment
-report fraud
+create account
+create free account
+customer service
+download
+download now
+enroll
+enroll in online Banking
+feedback
 forgot id
 forgot password
+free trail
+get started
+inquiry
+join
+log in
+login
+managing my account
+my account
+new account
+new customer
+opening my account
+order now
+register
+register a credit card
+register for an account
+register here
+register now
+report fraud
+request a demo
 request form
+reset password
+schedule an appointment
+see plans and pricing
+settings
+sign in
+sign on
+sign on to mobile banking
+sign up
+subscribe
+subscribe now
+subscribe today
+support center
+try for free
+use phone or email
+watch now
 `.trim().split('\n');
 
 /**

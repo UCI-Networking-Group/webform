@@ -2,22 +2,20 @@ import process from 'node:process';
 import assert from 'node:assert/strict';
 import * as fsPromises from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import mnemonist from 'mnemonist';
 import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
+import { xdgCache } from 'xdg-basedir';
+import { rimraf } from 'rimraf';
 
 import { StepSpec, JobSpec } from './types.js';
 import { URLPlus, hashObjectSha256, isElementVisible } from './utils.js';
 import { findNextSteps, markInterestingElements, getFormInformation, initFunction } from './page-functions.js';
 import { estimateReward } from './reward.js';
-
-/**
- * TODO List:
- *  - Integrate an auto cookie consent extension, like Consent-O-Matic or I-Still-Dont-Care-About-Cookies
- *  - Go deeper into multi-step forms
- */
 
 const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
 
@@ -197,9 +195,38 @@ function buildSteps(steps: StepSpec[], nextStep: StepSpec): StepSpec[] | null {
   return [...steps, nextStep];
 }
 
+async function downloadExtensions(cacheDir: string) {
+  const extensionUrls = [
+    'https://github.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/releases/download/v1.1.1/istilldontcareaboutcookies-1.1.1.crx',
+    'https://www.eff.org/files/privacy_badger-chrome.crx',
+  ];
+  const returnPaths = [];
+
+  for (const url of extensionUrls) {
+    const extractPath = path.join(cacheDir, 'ext-' + btoa(url).replaceAll('/', '@'));
+    returnPaths.push(extractPath);
+
+    if (await fsPromises.stat(extractPath).then(() => false).catch(() => true)) {
+      console.log('Downloading extension:', url);
+
+      const resource = await fetch(url);
+      const data = await resource.arrayBuffer();
+
+      const downloadPath = path.join(cacheDir, 'ext.crx');
+      await fsPromises.writeFile(downloadPath, Buffer.from(data));
+
+      execFileSync('7za', ['x', '-y', downloadPath, '-o' + extractPath]);
+    }
+  }
+
+  return returnPaths;
+}
+
 await (async () => {
+  const programName = 'web-form-crawler';
   const maxJobCount = 100;
   const priorityDecayFactor = 0.95;
+  const cacheDir = path.join(xdgCache || os.tmpdir(), programName);
 
   const [outDir, ...landingURLs] = process.argv.slice(2);
 
@@ -218,8 +245,33 @@ await (async () => {
   // Stealth plugin - not sure if it actually helps but why not
   chromium.use(StealthPlugin());
 
+  // Setup extensions
+  await fsPromises.mkdir(cacheDir, { recursive: true });
+  const extensionPaths = await downloadExtensions(cacheDir);
+
   // Initialize the browser
-  const browser = await chromium.launch();
+  const userDataDir = path.join(cacheDir, `user-data-${process.pid}`);
+  await rimraf(userDataDir);
+  const browserContext = await chromium.launchPersistentContext(userDataDir, {
+    args: [
+      '--disable-extensions-except=' + extensionPaths.join(','),
+      '--load-extension=' + extensionPaths.join(','),
+    ],
+    locale: 'en-US',
+    timezoneId: 'America/Los_Angeles',
+    serviceWorkers: 'block',
+    geolocation: { latitude: 38.581667, longitude: -121.494444 },
+    permissions: [
+      'geolocation',
+      'camera', 'microphone',
+      'ambient-light-sensor', 'accelerometer', 'gyroscope', 'magnetometer',
+    ],
+  });
+  browserContext.setDefaultTimeout(10000);
+  await browserContext.addInitScript(initFunction);
+  await browserContext.exposeFunction('hashObjectSha256', hashObjectSha256);
+  await browserContext.exposeBinding('isElementVisible', isElementVisible, { handle: true });
+
   const triedJobs = new Set<string>();
   let jobCount = 0;
 
@@ -227,23 +279,8 @@ await (async () => {
 
   // Main loop
   while (jobCount < maxJobCount && jobQueue.size > 0) {
-    const context = await browser.newContext({
-      locale: 'en-US',
-      timezoneId: 'America/Los_Angeles',
-      serviceWorkers: 'block',
-      geolocation: { latitude: 38.581667, longitude: -121.494444 },
-      permissions: [
-        'geolocation',
-        'camera', 'microphone',
-        'ambient-light-sensor', 'accelerometer', 'gyroscope', 'magnetometer',
-      ],
-    });
-    context.setDefaultTimeout(10000);
-    await context.addInitScript(initFunction);
-    await context.exposeFunction('hashObjectSha256', hashObjectSha256);
-    await context.exposeBinding('isElementVisible', isElementVisible, { handle: true });
-
-    const page = await context.newPage();
+    browserContext.pages().forEach((page) => page.close());
+    const page = await browserContext.newPage();
 
     do {
       const job = jobQueue.pop()!;
@@ -339,8 +376,7 @@ await (async () => {
 
     await page.waitForTimeout(2000); // Avoid running too fast
     await page.close();
-    await context.close();
   }
 
-  await browser.close();
+  await browserContext.close();
 })();
