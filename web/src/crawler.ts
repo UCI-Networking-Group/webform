@@ -5,7 +5,6 @@ import path from 'node:path';
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { PlaywrightBlocker } from '@cliqz/adblocker-playwright';
 import mnemonist from 'mnemonist';
 import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
 
@@ -18,7 +17,6 @@ import { estimateReward } from './reward.js';
  * TODO List:
  *  - Integrate an auto cookie consent extension, like Consent-O-Matic or I-Still-Dont-Care-About-Cookies
  *  - Go deeper into multi-step forms
- *  - Store the results on disk
  */
 
 const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
@@ -32,9 +30,8 @@ async function locateOriginElement(page: Page, step: StepSpec): Promise<Locator 
   // Match by ID
   const id = step.origin?.attributes.id || '';
 
-  if (id.match(/^[-A-Za-z0-9_]+$/) !== null) {
-    // TODO: 'A#8z9zk7-accordion-label' is not a valid selector
-    const locator = page.locator(`${tagName}#${id}`);
+  if (id) {
+    const locator = page.locator(`${tagName}[id="${id}"]`);
     if ((await locator.count()) > 0) return locator.first();
   }
 
@@ -202,12 +199,14 @@ function buildSteps(steps: StepSpec[], nextStep: StepSpec): StepSpec[] | null {
 
 await (async () => {
   const maxJobCount = 100;
+  const priorityDecayFactor = 0.95;
+
   const [outDir, ...landingURLs] = process.argv.slice(2);
 
   const jobQueue = new mnemonist.Heap<JobSpec>((job1, job2) => {
-    let retVal = Math.sign(job2.priority - job1.priority);
-    retVal = retVal === 0 ? Math.sign(job1.parents.length - job2.parents.length) : retVal;
-    return retVal;
+    const priority1 = job1.priority * (priorityDecayFactor ** job1.parents.length);
+    const priority2 = job2.priority * (priorityDecayFactor ** job2.parents.length);
+    return Math.sign(priority2 - priority1);
   });
 
   landingURLs.forEach((url) => jobQueue.push({
@@ -246,11 +245,6 @@ await (async () => {
 
     const page = await context.newPage();
 
-    // Enable ad blocker to reduce noise
-    await PlaywrightBlocker.fromPrebuiltAdsAndTracking(fetch).then(async (blocker) => {
-      await blocker.enableBlockingInPage(page);
-    });
-
     do {
       const job = jobQueue.pop()!;
       const jobHash = hashObjectSha256(job.steps.map((s) => s.action));
@@ -260,7 +254,7 @@ await (async () => {
         break;
       }
 
-      console.log('Current job: ', job);
+      console.log('Current job:', job);
       console.log(`Job ${jobHash} started`);
       triedJobs.add(jobHash);
       jobCount += 1;
@@ -269,15 +263,10 @@ await (async () => {
       let navigationHistory: (string | null)[] = [];
 
       try {
+        console.log('Navigating...');
         navigationHistory = await doSteps(page, job.steps);
       } catch (e) {
-        if (e instanceof PageStateError
-            || e instanceof PlaywrightErrors.TimeoutError
-            || (e instanceof Error && e.message.startsWith('page.goto: net::ERR_ABORTED '))) {
-          // TODO: Should we catch all errors?
-          // e.g., "page.goto: net::ERR_NAME_NOT_RESOLVED"
-          //       "page.goto: net::ERR_CONNECTION_REFUSED"
-          //       "locator.click: Target closed"
+        if (e instanceof Error) {
           console.log('Failed to recover page state:', e.message);
           break;
         }
@@ -289,6 +278,8 @@ await (async () => {
       const jobOutDir = path.join(outDir, jobHash);
 
       try {
+        console.log('Saving job information...');
+
         const pageHTML = await page.content();
         const pageTitle = await page.title();
         const calledSpecialAPIs = await page.evaluate(() => (window as any).calledSpecialAPIs);
@@ -311,8 +302,17 @@ await (async () => {
       }
 
       // Search the webpage for forms
-      console.log('Checking forms...');
-      await checkForms(page, jobOutDir); // TODO: Check exceptions
+      try {
+        console.log('Checking forms...');
+        await checkForms(page, jobOutDir);
+      } catch (e) {
+        if (e instanceof Error) {
+          console.log('Failed to check forms:', e.message);
+          break;
+        }
+
+        throw e;
+      }
 
       // Find possible next steps
       const possibleNextSteps = await page.evaluate(findNextSteps, DOM_VISITED_ATTR);
