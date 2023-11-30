@@ -5,36 +5,55 @@ import { StepSpec } from './types.js';
 const SEED_PHRASES = `
 12 months free
 account profile
+application form
 apply
+apply for an account
 apply now
+appointment
+book a demo
 business account
 buy
 buy now
+chat with us
+checkout
+click to open account
+client login
 contact center
 contact sales
 contact us
+continue
 continue with email
 continue your quote
 create account
 create free account
 customer service
+donate
 download
 download now
+english
 enroll
 enroll in online Banking
 feedback
 forgot id
 forgot password
-free trail
+free trial
+get a demo
 get started
+get this deal
+individual account
 inquiry
 join
 log in
 login
+log on
+logon
+make an appointment
 managing my account
 my account
+next step
 new account
 new customer
+open an account
 opening my account
 order now
 register
@@ -53,10 +72,14 @@ sign in
 sign on
 sign on to mobile banking
 sign up
+site map
+sitemap
+submit your application
 subscribe
 subscribe now
 subscribe today
 support center
+take a product tour
 try for free
 use phone or email
 watch now

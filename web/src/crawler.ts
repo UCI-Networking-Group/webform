@@ -159,18 +159,13 @@ async function checkForms(page: Page, outDir: string) {
   for (const form of await page.locator(`form:not([${DOM_VISITED_ATTR}])`).all()) {
     formIndex += 1;
 
-    try {
-      // await form.scrollIntoViewIfNeeded();
-      await form.screenshot({ path: path.join(outDir, `form-${formIndex}.png`) });
-    } catch (e) {
-      console.warn('Cannot take screenshot for the form');
-    }
+    await Promise.all([
+      form.screenshot({ path: path.join(outDir, `form-${formIndex}.png`) }).catch(() => null),
+      form.evaluate(getFormInformation)
+          .then((formInfo) => fsPromises.writeFile(path.join(outDir, `form-${formIndex}.json`),
+                                                   JSON.stringify(formInfo, null, 2))),
+    ]);
 
-    const formInfo = await form.evaluate(getFormInformation);
-    await fsPromises.writeFile(
-      path.join(outDir, `form-${formIndex}.json`),
-      JSON.stringify(formInfo, null, 2),
-    );
     console.log(`Web form #${formIndex} saved`);
   }
 }
@@ -257,6 +252,7 @@ await (async () => {
       '--disable-extensions-except=' + extensionPaths.join(','),
       '--load-extension=' + extensionPaths.join(','),
     ],
+    chromiumSandbox: true,
     locale: 'en-US',
     timezoneId: 'America/Los_Angeles',
     serviceWorkers: 'block',
@@ -294,7 +290,6 @@ await (async () => {
       console.log('Current job:', job);
       console.log(`Job ${jobHash} started`);
       triedJobs.add(jobHash);
-      jobCount += 1;
 
       // Do the steps
       let navigationHistory: (string | null)[] = [];
@@ -317,18 +312,24 @@ await (async () => {
       try {
         console.log('Saving job information...');
 
-        const pageHTML = await page.content();
-        const pageTitle = await page.title();
-        const calledSpecialAPIs = await page.evaluate(() => (window as any).calledSpecialAPIs);
-        const screenshot = await page.screenshot({ fullPage: true });
+        const [pageHTML, pageTitle, calledSpecialAPIs, screenshot] = await Promise.all([
+          page.content(),
+          page.title(),
+          page.evaluate(() => (window as any).calledSpecialAPIs),
+          page.screenshot({ fullPage: true }),
+        ]);
 
         await fsPromises.mkdir(jobOutDir);
-        await fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML);
-        await fsPromises.writeFile(path.join(jobOutDir, 'page.png'), screenshot);
-        await fsPromises.writeFile(
-          path.join(jobOutDir, 'job.json'),
-          JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
-        );
+        jobCount += 1;
+
+        await Promise.all([
+          fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML),
+          fsPromises.writeFile(path.join(jobOutDir, 'page.png'), screenshot),
+          await fsPromises.writeFile(
+            path.join(jobOutDir, 'job.json'),
+            JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
+          ),
+        ]);
       } catch (e) {
         if (e instanceof Error) {
           console.log('Failed to save job information:', e.message);
@@ -355,7 +356,7 @@ await (async () => {
       const possibleNextSteps = await page.evaluate(findNextSteps, DOM_VISITED_ATTR);
       let newJobCount = 0;
 
-      for (const step of possibleNextSteps) {
+      await Promise.all(possibleNextSteps.map(async (step) => {
         const reward = await estimateReward(step);
         const newSteps = buildSteps(job.steps, step);
 
@@ -368,13 +369,13 @@ await (async () => {
 
           newJobCount += 1;
         }
-      }
+      }));
 
       console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
     // eslint-disable-next-line no-constant-condition
     } while (false);
 
-    await page.waitForTimeout(2000); // Avoid running too fast
+    await page.waitForTimeout(1000); // Avoid running too fast
     await page.close();
   }
 
