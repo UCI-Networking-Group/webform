@@ -58,15 +58,26 @@ export function initFunction() {
     if (args[0]?.video) calledSpecialAPIs['MediaDevices.getDisplayMedia:video'] = true;
     return getDisplayMedia.apply(this, args);
   };
+
+  // Avoid popups
+  window.open = function (url?: string | URL, target?: string, features?: string): Window | null {
+    if (!!url) window.location.replace(url.toString());
+    return null;
+  }
 }
 
 export async function getFormInformation(formElement: HTMLFormElement): Promise<WebForm> {
+  function getTrimmedText(element: HTMLElement): string {
+    const rawText = element.innerText || element.textContent || '';
+    return rawText.split('\n').map((s) => s.trim()).join('\n');
+  }
+
   async function getElementInformation(element: Element): Promise<ElementInformation> {
     return {
       outerHTML: element.outerHTML,
       tagName: element.tagName,
       attributes: [...element.attributes].reduce((o, a) => Object.assign(o, { [a.name]: a.value }), {}),
-      text: element instanceof HTMLElement ? element.innerText.trim() : '',
+      text: getTrimmedText(element as HTMLElement),
       isVisible: await (window as any).isElementVisible(formElement),
     };
   }
@@ -104,14 +115,25 @@ export async function getFormInformation(formElement: HTMLFormElement): Promise<
 
     // If no label, provide the previous (visible) element as a hint
     if (fieldInfo.labelElement === undefined) {
-      for (let e: Element | null = childElement; e !== null;) {
-        e = e?.previousElementSibling || e?.parentElement?.previousElementSibling || null;
+      const otherFields = Array.from(formElement.elements)
+                               .filter((o) => (o as HTMLInputElement).name !== fieldInfo.name && o !== childElement);
+      let previousElement = null;
 
-        if (e instanceof HTMLElement && formElement.contains(e)
-            && !Array.prototype.some.call(formElement.elements, (o) => e?.contains(o))
-            && (window as any).isElementVisible) {
-          fieldInfo.previousElement = await getElementInformation(e);
+      for (let e: Element | null = childElement;
+           previousElement === null && formElement.contains(e) && !!e && otherFields.every((o) => !e?.contains(o));
+           e = e.parentElement) {
+        for (let sibling = e.previousElementSibling;
+             sibling !== null && otherFields.every((o) => !sibling?.contains(o));
+             sibling = sibling?.previousElementSibling) {
+          if (!!(sibling as HTMLElement).innerText) {
+            previousElement = sibling;
+            break;
+          }
         }
+      }
+
+      if (previousElement !== null) {
+        fieldInfo.previousElement = await getElementInformation(previousElement);
       }
     }
   }
@@ -156,8 +178,9 @@ export async function findNextSteps(markAttr: string): Promise<StepSpec[]> {
     const origin = {
       location: window.location.href,
       tagName: element.tagName,
-      attributes,
+      id: element.id,
       textContent: element.textContent || '',
+      text: ((element as HTMLElement).innerText || element.getAttribute('aria-label') || '').trim().toString(),
     };
 
     if (element instanceof HTMLAnchorElement && element.onclick === null && !!element.href.match(/^https?:/)) {

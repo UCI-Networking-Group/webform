@@ -30,3 +30,10 @@ export class URLPlus extends URL {
 export async function isElementVisible(_source: any, elementHandle: ElementHandle): Promise<boolean> {
   return elementHandle.isVisible();
 }
+
+/**
+ * Sleep for a given number of milliseconds
+ */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

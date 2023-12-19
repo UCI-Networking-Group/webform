@@ -1,9 +1,7 @@
-import * as tf from '@tensorflow/tfjs-node';
-import * as use from '@tensorflow-models/universal-sentence-encoder';
+import { pipeline, cos_sim } from '@xenova/transformers';
 import { StepSpec } from './types.js';
 
 const SEED_PHRASES = `
-12 months free
 account profile
 application form
 apply
@@ -12,59 +10,62 @@ apply now
 appointment
 book a demo
 business account
-buy
 buy now
 chat with us
+check status of request
 checkout
 click to open account
+click here to continue
 client login
+complaint form
 contact center
 contact sales
 contact us
 continue
 continue with email
-continue your quote
 create account
 create free account
 customer service
+data request form
 donate
 download
 download now
 english
+enter the site
+enquiry form
 enroll
-enroll in online Banking
+enroll in online banking
+fee payment
 feedback
 forgot id
 forgot password
 free trial
-get a demo
+get a quote
 get started
 get this deal
 individual account
 inquiry
 join
 log in
-login
-log on
 logon
-make an appointment
 managing my account
 my account
 next step
 new account
 new customer
 open an account
-opening my account
+opt-out here
 order now
+preferences
 register
 register a credit card
 register for an account
-register here
 register now
 report fraud
 request a demo
-request form
+request records
 reset password
+retrieve a quote
 schedule an appointment
 see plans and pricing
 settings
@@ -72,7 +73,6 @@ sign in
 sign on
 sign on to mobile banking
 sign up
-site map
 sitemap
 submit your application
 subscribe
@@ -82,7 +82,6 @@ support center
 take a product tour
 try for free
 use phone or email
-watch now
 `.trim().split('\n');
 
 /**
@@ -90,21 +89,28 @@ watch now
  */
 // eslint-disable-next-line import/prefer-default-export
 export const estimateReward = await (async () => {
-  const model = await use.load();
-  const seedEmbeddings = await model.embed(SEED_PHRASES);
+  let pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+  const seedEmbeddings = await pipe(SEED_PHRASES, { pooling: 'mean', normalize: true });
 
-  return async (step: StepSpec): Promise<number> => {
-    const textContent = step?.origin?.textContent;
-    const ariaLabel = step?.origin?.attributes['aria-label'];
+  return async (step: StepSpec, randomFactor=0.05): Promise<number> => {
+    let text = step?.origin?.text;
+    let maxSimilarity = -1.0;
 
-    for (const text of [textContent, ariaLabel]) {
-      if (text) {
-        const embedding = await model.embed(text.trim().toLowerCase());
-        const score = await tf.matMul(embedding, seedEmbeddings, false, true).max(1).array();
-        return (score as number[])[0];
+    if (!!!text && step.action[0] == 'goto') {
+      const parsedUrl = new URL(step.action[1]);
+      text = parsedUrl.pathname + parsedUrl.search;
+    }
+
+    if (text) {
+      const embedding = await pipe(text, { pooling: 'mean', normalize: true });
+
+      for (let i = 0; i < SEED_PHRASES.length; i++) {
+        const similarity = cos_sim(seedEmbeddings[i].data, embedding.data);
+
+        if (similarity > maxSimilarity) maxSimilarity = similarity;
       }
     }
 
-    return 0.0;
+    return maxSimilarity + randomFactor * Math.random();
   };
 })();

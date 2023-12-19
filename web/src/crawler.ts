@@ -13,7 +13,7 @@ import { xdgCache } from 'xdg-basedir';
 import { rimraf } from 'rimraf';
 
 import { StepSpec, JobSpec } from './types.js';
-import { URLPlus, hashObjectSha256, isElementVisible } from './utils.js';
+import { URLPlus, hashObjectSha256, isElementVisible, sleep } from './utils.js';
 import { findNextSteps, markInterestingElements, getFormInformation, initFunction } from './page-functions.js';
 import { estimateReward } from './reward.js';
 
@@ -26,7 +26,7 @@ async function locateOriginElement(page: Page, step: StepSpec): Promise<Locator 
   const tagName = step.origin?.tagName || 'invalid';
 
   // Match by ID
-  const id = step.origin?.attributes.id || '';
+  const id = step.origin?.id;
 
   if (id) {
     const locator = page.locator(`${tagName}[id="${id}"]`);
@@ -74,6 +74,7 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
 
   const navigationHandler = () => { hasNavigated = true; };
   page.on('domcontentloaded', navigationHandler);
+  let beforeUrl = steps[0].action[1] + "/...";  // Initialize with a dummy URL of the same domain
 
   for (const [index, step] of steps.entries()) {
     hasNavigated = false;
@@ -114,8 +115,6 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
       await page.evaluate(markInterestingElements, DOM_VISITED_ATTR);
     }
 
-    const beforeUrl = page.url();
-
     await actionFunc();
 
     // Wait for possible navigation
@@ -123,9 +122,8 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
     await waitForLoading(page);
 
     const afterUrl = page.url();
-    if (beforeUrl !== afterUrl) hasNavigated = true;
 
-    if (hasNavigated) {
+    if (beforeUrl !== afterUrl) {
       console.log('Navigated to:', afterUrl);
 
       const beforeUrlParsed = new URLPlus(beforeUrl);
@@ -141,9 +139,11 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
           throw new PageStateError('Navigated to a previously visited URL');
         }
       });
-    }
 
-    history.push(hasNavigated ? afterUrl : null);
+      history.push(beforeUrl = afterUrl);
+    } else {
+      history.push(null);
+    }
   }
 
   page.off('domcontentloaded', navigationHandler);
@@ -220,7 +220,7 @@ async function downloadExtensions(cacheDir: string) {
 await (async () => {
   const programName = 'web-form-crawler';
   const maxJobCount = 100;
-  const priorityDecayFactor = 0.95;
+  const priorityDecayFactor = 0.90;
   const cacheDir = path.join(xdgCache || os.tmpdir(), programName);
 
   const [outDir, ...landingURLs] = process.argv.slice(2);
@@ -238,7 +238,10 @@ await (async () => {
   }));
 
   // Stealth plugin - not sure if it actually helps but why not
-  chromium.use(StealthPlugin());
+  const stealth = StealthPlugin();
+  // Workaround: https://github.com/berstend/puppeteer-extra/issues/858
+  stealth.enabledEvasions.delete('user-agent-override');
+  chromium.use(stealth);
 
   // Setup extensions
   await fsPromises.mkdir(cacheDir, { recursive: true });
@@ -253,6 +256,7 @@ await (async () => {
       '--load-extension=' + extensionPaths.join(','),
     ],
     chromiumSandbox: true,
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.28 Safari/537.36',
     locale: 'en-US',
     timezoneId: 'America/Los_Angeles',
     serviceWorkers: 'block',
@@ -325,7 +329,7 @@ await (async () => {
         await Promise.all([
           fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML),
           fsPromises.writeFile(path.join(jobOutDir, 'page.png'), screenshot),
-          await fsPromises.writeFile(
+          fsPromises.writeFile(
             path.join(jobOutDir, 'job.json'),
             JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
           ),
@@ -357,7 +361,7 @@ await (async () => {
       let newJobCount = 0;
 
       await Promise.all(possibleNextSteps.map(async (step) => {
-        const reward = await estimateReward(step);
+        const reward = step.reward = await estimateReward(step);
         const newSteps = buildSteps(job.steps, step);
 
         if (reward > 0 && !!newSteps) {
@@ -371,12 +375,17 @@ await (async () => {
         }
       }));
 
+      // Save next step information for debugging
+      await fsPromises.writeFile(
+        path.join(jobOutDir, 'next-steps.json'),
+        JSON.stringify(possibleNextSteps, null, 2)
+      );
+
       console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
     // eslint-disable-next-line no-constant-condition
     } while (false);
 
-    await page.waitForTimeout(1000); // Avoid running too fast
-    await page.close();
+    await Promise.all([page.close(), sleep(1000)]);  // Avoid running too fast
   }
 
   await browserContext.close();

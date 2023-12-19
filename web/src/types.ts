@@ -3,9 +3,11 @@ export interface StepSpec {
   origin?: {
     location: string;
     tagName: string;
+    id: string;
     textContent: string;
-    attributes: { [key: string]: string };
+    text: string;
   };
+  reward?: number;
 }
 
 export interface JobSpec {
