@@ -14,7 +14,7 @@ import { rimraf } from 'rimraf';
 
 import { StepSpec, JobSpec } from './types.js';
 import { URLPlus, hashObjectSha256, isElementVisible, sleep } from './utils.js';
-import { findNextSteps, markInterestingElements, getFormInformation, initFunction } from './page-functions.js';
+import { findNextSteps, markInterestingElements, getFormInformation, initFunction, patchNonFormFields } from './page-functions.js';
 import { estimateReward } from './reward.js';
 
 const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
@@ -167,6 +167,22 @@ async function checkForms(page: Page, outDir: string) {
     ]);
 
     console.log(`Web form #${formIndex} saved`);
+  }
+
+  await page.evaluate(patchNonFormFields);
+  formIndex = 0;
+
+  for (const form of await page.getByTestId('patched-form').all()) {
+    formIndex += 1;
+
+    await Promise.all([
+      form.screenshot({ path: path.join(outDir, `form-p${formIndex}.png`) }).catch(() => null),
+      form.evaluate(getFormInformation)
+          .then((formInfo) => fsPromises.writeFile(path.join(outDir, `form-p${formIndex}.json`),
+                                                   JSON.stringify(formInfo, null, 2))),
+    ]);
+
+    console.log(`Web form #p${formIndex} saved`);
   }
 }
 

@@ -1,5 +1,3 @@
-/* eslint-disable func-names */
-
 import {
   StepSpec, ElementInformation, WebFormField, WebForm,
 } from './types.js';
@@ -109,7 +107,7 @@ export async function getFormInformation(formElement: HTMLFormElement): Promise<
 
     // Find the label associated with the input element
     if (childElement.id) {
-      const e: HTMLElement | null = formElement.querySelector(`label[for="${childElement.id}"]`);
+      const e = formElement.querySelector<HTMLElement>(`label[for="${childElement.id}"]`);
       if (e !== null) fieldInfo.labelElement = await getElementInformation(e);
     }
 
@@ -141,6 +139,67 @@ export async function getFormInformation(formElement: HTMLFormElement): Promise<
   return formInfo;
 }
 
+/**
+ * Patch non-form fields to make them wrapped in a form element
+ */
+export async function patchNonFormFields() {
+  function getAncestors(node: HTMLElement) {
+    const nodes = [node];
+    for (let n = node; !!n; n = n.parentElement!) nodes.unshift(n);
+    return nodes;
+  }
+
+  function getFirstCommonParent(node1: HTMLElement, node2: HTMLElement): HTMLElement | null {
+    const parents1 = getAncestors(node1);
+    const parents2 = getAncestors(node2);
+    let commonParent = null;
+
+    while (parents1.length > 0 && parents1[0] === parents2[0]) {
+      commonParent = parents1[0];
+      parents1.shift();
+      parents2.shift();
+    }
+
+    return commonParent;
+  }
+
+  const elements = [];
+
+  for (const labelElement of document.body.querySelectorAll<HTMLElement>('label[for]')) {
+    const inputElement = document.getElementById(labelElement.getAttribute('for') || '');
+
+    if (inputElement) {
+      elements.push(inputElement);
+
+      for (let idx = 0; idx < elements.length - 1; idx++) {
+        const commonParent = getFirstCommonParent(inputElement, elements[idx]);
+
+        if (commonParent !== null && commonParent.querySelector('form') === null) {
+          elements[idx] = commonParent;
+          elements.pop();
+          break;
+        }
+      }
+    }
+  }
+
+  for (const e of elements) {
+    const computedStyle = window.getComputedStyle(e);
+    const newNode = document.createElement("form");
+
+    Array.from(e.attributes).forEach((attr) => newNode.setAttribute(attr.name, attr.value));
+    Array.from(computedStyle).forEach(
+      (key) => newNode.style.setProperty(
+        key, computedStyle.getPropertyValue(key), computedStyle.getPropertyPriority(key)
+      )
+    );
+    newNode.setAttribute('data-testid', 'patched-form');
+    newNode.innerHTML = e.innerHTML;
+
+    e.replaceWith(newNode);
+  }
+}
+
 export function markInterestingElements(markAttr: string) {
   for (const element of document.body.querySelectorAll('*')) {
     if (['link', 'button', 'form'].includes(element.role || '')
@@ -154,12 +213,12 @@ export async function findNextSteps(markAttr: string): Promise<StepSpec[]> {
   // Ref: https://gist.github.com/iiLaurens/81b1b47f6259485c93ce6f0cdd17490a
   let clickableElements: Element[] = [];
 
-  for (const element of document.body.querySelectorAll(`*:not([${markAttr}])`)) {
+  for (const element of document.body.querySelectorAll<HTMLElement>(`*:not([${markAttr}])`)) {
     // Skip disabled elements
     if (element.ariaDisabled === 'true') continue;
     // But do not skip hidden elements because we may still want to click on them
 
-    if (!!(element as HTMLElement).onclick
+    if (!!(element).onclick
         || ['link', 'button'].includes(element.role || '')
         || ['A', 'BUTTON'].includes(element.tagName)) {
       clickableElements.push(element);
