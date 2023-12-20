@@ -170,15 +170,21 @@ export async function patchNonFormFields() {
   const elements = [];
 
   for (const labelElement of document.body.querySelectorAll<HTMLElement>('label[for]')) {
-    const inputElement = document.getElementById(labelElement.getAttribute('for') || '');
+    let inputElement = null;
+    let containerElement = null;
 
-    if (inputElement && (inputElement as HTMLInputElement).form === null) {
-      elements.push(inputElement);
+    if ((inputElement = document.getElementById(labelElement.getAttribute('for') || ''))
+        && (containerElement = getFirstCommonParent(inputElement, labelElement))
+        && ['INPUT', 'SELECT', 'TEXTAREA'].includes(inputElement.tagName)
+        && (inputElement as HTMLInputElement).form === null) {
+      elements.push(containerElement);
 
       for (let idx = 0; idx < elements.length - 1; idx += 1) {
-        const commonParent = getFirstCommonParent(inputElement, elements[idx]);
+        const commonParent = getFirstCommonParent(containerElement, elements[idx]);
 
-        if (commonParent !== null && commonParent.querySelector('form') === null) {
+        if (commonParent !== null
+            && commonParent !== document.body
+            && commonParent.querySelector('form') === null) {
           elements[idx] = commonParent;
           elements.pop();
           break;
@@ -195,6 +201,7 @@ export async function patchNonFormFields() {
     Array.from(style).forEach(
       (key) => newNode.style.setProperty(key, style.getPropertyValue(key), style.getPropertyPriority(key)),
     );
+    newNode.setAttribute('data-old-tag', e.tagName);
     newNode.setAttribute('data-testid', 'patched-form');
     newNode.innerHTML = e.innerHTML;
 
