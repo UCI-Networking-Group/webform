@@ -21,6 +21,8 @@ module.exports = {
     'no-continue': 'off',
     'max-classes-per-file': 'off',
     'prefer-template': 'off',
+    'no-multi-assign': 'off',
+    'no-param-reassign': ['error', { props: false }],
     'object-curly-newline': ['error', { ExportDeclaration: { multiline: true, minProperties: 4 } }],
     '@typescript-eslint/no-floating-promises': ['error'],
     '@typescript-eslint/member-delimiter-style': ['error'],

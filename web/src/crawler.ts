@@ -1,6 +1,6 @@
 import process from 'node:process';
 import assert from 'node:assert/strict';
-import * as fsPromises from 'node:fs/promises';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -14,7 +14,9 @@ import { rimraf } from 'rimraf';
 
 import { StepSpec, JobSpec } from './types.js';
 import { URLPlus, hashObjectSha256, isElementVisible, sleep } from './utils.js';
-import { findNextSteps, markInterestingElements, getFormInformation, initFunction, patchNonFormFields } from './page-functions.js';
+import {
+  findNextSteps, markInterestingElements, getFormInformation, initFunction, patchNonFormFields,
+} from './page-functions.js';
 import { estimateReward } from './reward.js';
 
 const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
@@ -74,7 +76,7 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
 
   const navigationHandler = () => { hasNavigated = true; };
   page.on('domcontentloaded', navigationHandler);
-  let beforeUrl = steps[0].action[1] + "/...";  // Initialize with a dummy URL of the same domain
+  let beforeUrl = steps[0].action[1] + '/...'; // Initialize with a dummy URL of the same domain
 
   for (const [index, step] of steps.entries()) {
     hasNavigated = false;
@@ -123,7 +125,10 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
 
     const afterUrl = page.url();
 
-    if (beforeUrl !== afterUrl) {
+    // hasNavigated should have been set but just in case...
+    if (beforeUrl !== afterUrl) hasNavigated = true;
+
+    if (hasNavigated) {
       console.log('Navigated to:', afterUrl);
 
       const beforeUrlParsed = new URLPlus(beforeUrl);
@@ -139,11 +144,10 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
           throw new PageStateError('Navigated to a previously visited URL');
         }
       });
-
-      history.push(beforeUrl = afterUrl);
-    } else {
-      history.push(null);
     }
+
+    beforeUrl = afterUrl;
+    history.push(hasNavigated ? afterUrl : null);
   }
 
   page.off('domcontentloaded', navigationHandler);
@@ -154,35 +158,31 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
 }
 
 async function checkForms(page: Page, outDir: string) {
-  let formIndex = 0;
+  let forms = await page.locator(`form:not([${DOM_VISITED_ATTR}])`).all();
 
-  for (const form of await page.locator(`form:not([${DOM_VISITED_ATTR}])`).all()) {
-    formIndex += 1;
-
+  for (const [idx, form] of forms.entries()) {
     await Promise.all([
-      form.screenshot({ path: path.join(outDir, `form-${formIndex}.png`) }).catch(() => null),
-      form.evaluate(getFormInformation)
-          .then((formInfo) => fsPromises.writeFile(path.join(outDir, `form-${formIndex}.json`),
-                                                   JSON.stringify(formInfo, null, 2))),
+      form.screenshot({ path: path.join(outDir, `form-${idx}.png`) }).catch(() => null),
+      form
+        .evaluate(getFormInformation)
+        .then((info) => fs.writeFile(path.join(outDir, `form-${idx}.json`), JSON.stringify(info, null, 2))),
     ]);
 
-    console.log(`Web form #${formIndex} saved`);
+    console.log(`Web form #${idx} saved`);
   }
 
   await page.evaluate(patchNonFormFields);
-  formIndex = 0;
+  forms = await page.getByTestId('patched-form').all();
 
-  for (const form of await page.getByTestId('patched-form').all()) {
-    formIndex += 1;
-
+  for (const [idx, form] of forms.entries()) {
     await Promise.all([
-      form.screenshot({ path: path.join(outDir, `form-p${formIndex}.png`) }).catch(() => null),
-      form.evaluate(getFormInformation)
-          .then((formInfo) => fsPromises.writeFile(path.join(outDir, `form-p${formIndex}.json`),
-                                                   JSON.stringify(formInfo, null, 2))),
+      form.screenshot({ path: path.join(outDir, `form-p${idx}.png`) }).catch(() => null),
+      form
+        .evaluate(getFormInformation)
+        .then((info) => fs.writeFile(path.join(outDir, `form-p${idx}.json`), JSON.stringify(info, null, 2))),
     ]);
 
-    console.log(`Web form #p${formIndex} saved`);
+    console.log(`Web form #p${idx} saved`);
   }
 }
 
@@ -208,6 +208,7 @@ function buildSteps(steps: StepSpec[], nextStep: StepSpec): StepSpec[] | null {
 
 async function downloadExtensions(cacheDir: string) {
   const extensionUrls = [
+    // eslint-disable-next-line max-len
     'https://github.com/OhMyGuus/I-Still-Dont-Care-About-Cookies/releases/download/v1.1.1/istilldontcareaboutcookies-1.1.1.crx',
     'https://www.eff.org/files/privacy_badger-chrome.crx',
   ];
@@ -217,14 +218,14 @@ async function downloadExtensions(cacheDir: string) {
     const extractPath = path.join(cacheDir, 'ext-' + btoa(url).replaceAll('/', '@'));
     returnPaths.push(extractPath);
 
-    if (await fsPromises.stat(extractPath).then(() => false).catch(() => true)) {
+    if (await fs.stat(extractPath).then(() => false).catch(() => true)) {
       console.log('Downloading extension:', url);
 
       const resource = await fetch(url);
       const data = await resource.arrayBuffer();
 
       const downloadPath = path.join(cacheDir, 'ext.crx');
-      await fsPromises.writeFile(downloadPath, Buffer.from(data));
+      await fs.writeFile(downloadPath, Buffer.from(data));
 
       execFileSync('7za', ['x', '-y', downloadPath, '-o' + extractPath]);
     }
@@ -260,7 +261,7 @@ await (async () => {
   chromium.use(stealth);
 
   // Setup extensions
-  await fsPromises.mkdir(cacheDir, { recursive: true });
+  await fs.mkdir(cacheDir, { recursive: true });
   const extensionPaths = await downloadExtensions(cacheDir);
 
   // Initialize the browser
@@ -272,6 +273,7 @@ await (async () => {
       '--load-extension=' + extensionPaths.join(','),
     ],
     chromiumSandbox: true,
+    // eslint-disable-next-line max-len
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.28 Safari/537.36',
     locale: 'en-US',
     timezoneId: 'America/Los_Angeles',
@@ -284,19 +286,22 @@ await (async () => {
     ],
   });
   browserContext.setDefaultTimeout(10000);
-  await browserContext.addInitScript(initFunction);
-  await browserContext.exposeFunction('hashObjectSha256', hashObjectSha256);
-  await browserContext.exposeBinding('isElementVisible', isElementVisible, { handle: true });
+
+  await Promise.all([
+    browserContext.addInitScript(initFunction),
+    browserContext.exposeFunction('hashObjectSha256', hashObjectSha256),
+    browserContext.exposeBinding('isElementVisible', isElementVisible, { handle: true }),
+    fs.mkdir(outDir),
+  ]);
 
   const triedJobs = new Set<string>();
   let jobCount = 0;
-
-  await fsPromises.mkdir(outDir);
 
   // Main loop
   while (jobCount < maxJobCount && jobQueue.size > 0) {
     browserContext.pages().forEach((page) => page.close());
     const page = await browserContext.newPage();
+    await browserContext.setOffline(false);
 
     do {
       const job = jobQueue.pop()!;
@@ -337,15 +342,16 @@ await (async () => {
           page.title(),
           page.evaluate(() => (window as any).calledSpecialAPIs),
           page.screenshot({ fullPage: true }),
+          browserContext.setOffline(true),
         ]);
 
-        await fsPromises.mkdir(jobOutDir);
+        await fs.mkdir(jobOutDir);
         jobCount += 1;
 
         await Promise.all([
-          fsPromises.writeFile(path.join(jobOutDir, 'page.html'), pageHTML),
-          fsPromises.writeFile(path.join(jobOutDir, 'page.png'), screenshot),
-          fsPromises.writeFile(
+          fs.writeFile(path.join(jobOutDir, 'page.html'), pageHTML),
+          fs.writeFile(path.join(jobOutDir, 'page.png'), screenshot),
+          fs.writeFile(
             path.join(jobOutDir, 'job.json'),
             JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
           ),
@@ -392,16 +398,16 @@ await (async () => {
       }));
 
       // Save next step information for debugging
-      await fsPromises.writeFile(
+      await fs.writeFile(
         path.join(jobOutDir, 'next-steps.json'),
-        JSON.stringify(possibleNextSteps, null, 2)
+        JSON.stringify(possibleNextSteps, null, 2),
       );
 
       console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
     // eslint-disable-next-line no-constant-condition
     } while (false);
 
-    await Promise.all([page.close(), sleep(1000)]);  // Avoid running too fast
+    await Promise.all([page.close(), sleep(2000)]); // Avoid running too fast
   }
 
   await browserContext.close();

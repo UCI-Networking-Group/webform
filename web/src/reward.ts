@@ -89,14 +89,14 @@ use phone or email
  */
 // eslint-disable-next-line import/prefer-default-export
 export const estimateReward = await (async () => {
-  let pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+  const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
   const seedEmbeddings = await pipe(SEED_PHRASES, { pooling: 'mean', normalize: true });
 
-  return async (step: StepSpec, randomFactor=0.05): Promise<number> => {
+  return async (step: StepSpec, randomFactor = 0.05): Promise<number> => {
     let text = step?.origin?.text;
     let maxSimilarity = -1.0;
 
-    if (!!!text && step.action[0] == 'goto') {
+    if (text && step.action[0] === 'goto') {
       const parsedUrl = new URL(step.action[1]);
       text = parsedUrl.pathname + parsedUrl.search;
     }
@@ -104,7 +104,7 @@ export const estimateReward = await (async () => {
     if (text) {
       const embedding = await pipe(text, { pooling: 'mean', normalize: true });
 
-      for (let i = 0; i < SEED_PHRASES.length; i++) {
+      for (let i = 0; i < SEED_PHRASES.length; i += 1) {
         const similarity = cos_sim(seedEmbeddings[i].data, embedding.data);
 
         if (similarity > maxSimilarity) maxSimilarity = similarity;

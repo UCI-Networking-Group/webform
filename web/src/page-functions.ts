@@ -58,10 +58,11 @@ export function initFunction() {
   };
 
   // Avoid popups
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   window.open = function (url?: string | URL, target?: string, features?: string): Window | null {
-    if (!!url) window.location.replace(url.toString());
+    if (url) window.location.replace(url.toString());
     return null;
-  }
+  };
 }
 
 export async function getFormInformation(formElement: HTMLFormElement): Promise<WebForm> {
@@ -113,17 +114,21 @@ export async function getFormInformation(formElement: HTMLFormElement): Promise<
 
     // If no label, provide the previous (visible) element as a hint
     if (fieldInfo.labelElement === undefined) {
-      const otherFields = Array.from(formElement.elements)
-                               .filter((o) => (o as HTMLInputElement).name !== fieldInfo.name && o !== childElement);
+      const otherFields = Array
+        .from(formElement.elements)
+        .filter((o) => (o as HTMLInputElement).name !== fieldInfo.name && o !== childElement);
       let previousElement = null;
 
-      for (let e: Element | null = childElement;
-           previousElement === null && formElement.contains(e) && !!e && otherFields.every((o) => !e?.contains(o));
-           e = e.parentElement) {
-        for (let sibling = e.previousElementSibling;
-             sibling !== null && otherFields.every((o) => !sibling?.contains(o));
-             sibling = sibling?.previousElementSibling) {
-          if (!!(sibling as HTMLElement).innerText) {
+      for (
+        let e: Element | null = childElement;
+        previousElement === null && formElement.contains(e) && !!e && otherFields.every((o) => !e?.contains(o));
+        e = e.parentElement
+      ) {
+        for (
+          let sibling = e.previousElementSibling;
+          sibling !== null && otherFields.every((o) => !sibling?.contains(o));
+          sibling = sibling?.previousElementSibling) {
+          if ((sibling as HTMLElement).innerText) {
             previousElement = sibling;
             break;
           }
@@ -145,7 +150,7 @@ export async function getFormInformation(formElement: HTMLFormElement): Promise<
 export async function patchNonFormFields() {
   function getAncestors(node: HTMLElement) {
     const nodes = [node];
-    for (let n = node; !!n; n = n.parentElement!) nodes.unshift(n);
+    for (let n = node; n; n = n.parentElement!) nodes.unshift(n);
     return nodes;
   }
 
@@ -155,8 +160,7 @@ export async function patchNonFormFields() {
     let commonParent = null;
 
     while (parents1.length > 0 && parents1[0] === parents2[0]) {
-      commonParent = parents1[0];
-      parents1.shift();
+      commonParent = parents1.shift()!;
       parents2.shift();
     }
 
@@ -168,10 +172,10 @@ export async function patchNonFormFields() {
   for (const labelElement of document.body.querySelectorAll<HTMLElement>('label[for]')) {
     const inputElement = document.getElementById(labelElement.getAttribute('for') || '');
 
-    if (inputElement) {
+    if (inputElement && (inputElement as HTMLInputElement).form === null) {
       elements.push(inputElement);
 
-      for (let idx = 0; idx < elements.length - 1; idx++) {
+      for (let idx = 0; idx < elements.length - 1; idx += 1) {
         const commonParent = getFirstCommonParent(inputElement, elements[idx]);
 
         if (commonParent !== null && commonParent.querySelector('form') === null) {
@@ -184,14 +188,12 @@ export async function patchNonFormFields() {
   }
 
   for (const e of elements) {
-    const computedStyle = window.getComputedStyle(e);
-    const newNode = document.createElement("form");
+    const style = window.getComputedStyle(e);
+    const newNode = document.createElement('form');
 
     Array.from(e.attributes).forEach((attr) => newNode.setAttribute(attr.name, attr.value));
-    Array.from(computedStyle).forEach(
-      (key) => newNode.style.setProperty(
-        key, computedStyle.getPropertyValue(key), computedStyle.getPropertyPriority(key)
-      )
+    Array.from(style).forEach(
+      (key) => newNode.style.setProperty(key, style.getPropertyValue(key), style.getPropertyPriority(key)),
     );
     newNode.setAttribute('data-testid', 'patched-form');
     newNode.innerHTML = e.innerHTML;

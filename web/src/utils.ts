@@ -35,5 +35,5 @@ export async function isElementVisible(_source: any, elementHandle: ElementHandl
  * Sleep for a given number of milliseconds
  */
 export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
