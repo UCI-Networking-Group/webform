@@ -4,14 +4,16 @@ import { StepSpec } from './types.js';
 const SEED_PHRASES = `
 account profile
 application form
-apply
+apply for a license
 apply for an account
+apply online
 apply now
 appointment
 book a demo
 business account
 buy now
 chat with us
+change my address
 check status of request
 checkout
 click to open account
@@ -23,12 +25,14 @@ contact sales
 contact us
 continue
 continue with email
-create account
+continue with phone number
+create an account
 create free account
 customer service
 data request form
 donate
-download
+do not sell my personal data
+download for free
 download now
 english
 enter the site
@@ -37,26 +41,40 @@ enroll
 enroll in online banking
 fee payment
 feedback
+file a claim
+file a report online
 forgot id
 forgot password
 free trial
 get a quote
 get started
 get this deal
+give now
 individual account
 inquiry
-join
+instant trial
+join for free
+join now
+join us
+login
 log in
 logon
+log on
+make a gift now
+make a payment
+manage booking
 managing my account
 my account
+my profile
 next step
 new account
 new customer
 open an account
 opt-out here
 order now
+post a review
 preferences
+redeem a gift card
 register
 register a credit card
 register for an account
@@ -74,6 +92,8 @@ sign on
 sign on to mobile banking
 sign up
 sitemap
+submit a tip
+submit feedback
 submit your application
 subscribe
 subscribe now
@@ -83,6 +103,7 @@ take a product tour
 try for free
 use phone or email
 `.trim().split('\n');
+console.log(SEED_PHRASES.length);
 
 /**
  * Estimate the reward of clicking an element
@@ -92,11 +113,11 @@ export const estimateReward = await (async () => {
   const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
   const seedEmbeddings = await pipe(SEED_PHRASES, { pooling: 'mean', normalize: true });
 
-  return async (step: StepSpec, randomFactor = 0.05): Promise<number> => {
+  return async (step: StepSpec): Promise<number> => {
     let text = step?.origin?.text;
     let maxSimilarity = -1.0;
 
-    if (text && step.action[0] === 'goto') {
+    if (!text && step.action[0] === 'goto') {
       const parsedUrl = new URL(step.action[1]);
       text = parsedUrl.pathname + parsedUrl.search;
     }
@@ -111,6 +132,6 @@ export const estimateReward = await (async () => {
       }
     }
 
-    return maxSimilarity + randomFactor * Math.random();
+    return maxSimilarity;
   };
 })();

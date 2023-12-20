@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import mnemonist from 'mnemonist';
-import { Locator, Page, errors as PlaywrightErrors } from 'playwright';
+import { BrowserContext, Locator, Page, errors as PlaywrightErrors } from 'playwright';
 import { xdgCache } from 'xdg-basedir';
 import { rimraf } from 'rimraf';
 
@@ -18,8 +18,6 @@ import {
   findNextSteps, markInterestingElements, getFormInformation, initFunction, patchNonFormFields,
 } from './page-functions.js';
 import { estimateReward } from './reward.js';
-
-const DOM_VISITED_ATTR = 'data-dom-visited' + (Math.random() + 1).toString(36).substring(2);
 
 /**
  * Locate the element that match the given attributes
@@ -114,7 +112,7 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
 
     if (index + 1 === steps.length) {
       // Before the last step, mark elements generated in previous steps
-      await page.evaluate(markInterestingElements, DOM_VISITED_ATTR);
+      await page.evaluate(markInterestingElements);
     }
 
     await actionFunc();
@@ -140,7 +138,8 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
 
       // Check navigation loop
       history.flatMap((s) => (s ? [new URLPlus(s)] : [])).forEach((historyUrl) => {
-        if (afterUrlParsed.pathname === historyUrl.pathname) {
+        if (afterUrlParsed.host === historyUrl.host
+            && afterUrlParsed.pathname === historyUrl.pathname) {
           throw new PageStateError('Navigated to a previously visited URL');
         }
       });
@@ -158,7 +157,7 @@ async function doSteps(page: Page, steps: StepSpec[]): Promise<(string | null)[]
 }
 
 async function checkForms(page: Page, outDir: string) {
-  let forms = await page.locator(`form:not([${DOM_VISITED_ATTR}])`).all();
+  let forms = await page.locator('form:not([data-flag-visited])').all();
 
   for (const [idx, form] of forms.entries()) {
     await Promise.all([
@@ -191,14 +190,25 @@ async function checkForms(page: Page, outDir: string) {
  */
 function buildSteps(steps: StepSpec[], nextStep: StepSpec): StepSpec[] | null {
   if (nextStep.action[0] === 'goto') {
-    const originalUrl = new URLPlus(steps[0].action[1]);
-    const newUrl = new URLPlus(nextStep.action[1]);
+    let originalUrl: URLPlus;
+    let nextUrl: URLPlus;
+
+    try {
+      originalUrl = new URLPlus(steps[0].action[1]);
+      nextUrl = new URLPlus(nextStep.action[1]);
+    } catch (e) {
+      if (e instanceof TypeError) {
+        console.log('Failed to parse URL:', (e as any).input);
+      }
+
+      return null;
+    }
 
     // Do not allow cross-domain navigation
-    if (originalUrl.effectiveDomain !== newUrl.effectiveDomain) return null;
+    if (originalUrl.effectiveDomain !== nextUrl.effectiveDomain) return null;
 
     // Avoid navigating to the same page
-    if (originalUrl.pathname === newUrl.pathname) return null;
+    if (originalUrl.pathname === nextUrl.pathname) return null;
 
     return [nextStep];
   }
@@ -234,34 +244,97 @@ async function downloadExtensions(cacheDir: string) {
   return returnPaths;
 }
 
-await (async () => {
-  const programName = 'web-form-crawler';
-  const maxJobCount = 100;
-  const priorityDecayFactor = 0.90;
-  const cacheDir = path.join(xdgCache || os.tmpdir(), programName);
+async function doJob(job: JobSpec, page: Page, outDir: string): Promise<StepSpec[] | null> {
+  await page.context().setOffline(false);
 
-  const [outDir, ...landingURLs] = process.argv.slice(2);
+  // Step 1: Navigation / Repeat steps
+  let navigationHistory: (string | null)[] = [];
 
-  const jobQueue = new mnemonist.Heap<JobSpec>((job1, job2) => {
-    const priority1 = job1.priority * (priorityDecayFactor ** job1.parents.length);
-    const priority2 = job2.priority * (priorityDecayFactor ** job2.parents.length);
-    return Math.sign(priority2 - priority1);
-  });
+  try {
+    console.log('Navigating...');
+    navigationHistory = await doSteps(page, job.steps);
+  } catch (e) {
+    if (e instanceof Error) {
+      console.error('Failed to recover page state:', e.message);
+      return null;
+    }
 
-  landingURLs.forEach((url) => jobQueue.push({
-    priority: 1000,
-    parents: [],
-    steps: [{ action: ['goto', url] }],
-  }));
+    throw e;
+  }
 
-  // Stealth plugin - not sure if it actually helps but why not
-  const stealth = StealthPlugin();
-  // Workaround: https://github.com/berstend/puppeteer-extra/issues/858
-  stealth.enabledEvasions.delete('user-agent-override');
-  chromium.use(stealth);
+  await page.context().setOffline(true);
 
+  // Step 2: Dump job information for later inspection
+  try {
+    console.log('Saving job information...');
+
+    const [pageHTML, pageTitle, calledSpecialAPIs, screenshot] = await Promise.all([
+      page.content(),
+      page.title(),
+      page.evaluate(() => (window as any).calledSpecialAPIs),
+      page.screenshot({ fullPage: true }),
+    ]);
+
+    await Promise.all([
+      fs.writeFile(path.join(outDir, 'page.html'), pageHTML),
+      fs.writeFile(path.join(outDir, 'page.png'), screenshot),
+      fs.writeFile(
+        path.join(outDir, 'job.json'),
+        JSON.stringify({ pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
+      ),
+    ]);
+  } catch (e) {
+    if (e instanceof Error) {
+      console.error('Failed to save job information:', e.message);
+      return null;
+    }
+
+    throw e;
+  }
+
+  // Step 3: Search the webpage for forms
+  try {
+    console.log('Checking forms...');
+    await checkForms(page, outDir);
+  } catch (e) {
+    if (e instanceof Error) {
+      console.error('Failed to check forms:', e.message);
+      return null;
+    }
+
+    throw e;
+  }
+
+  // Step 4: Find possible next steps
+  let nextStepChoices: StepSpec[] = [];
+
+  try {
+    nextStepChoices = await page.evaluate(findNextSteps);
+  } catch (e) {
+    if (e instanceof Error) {
+      console.log('Failed to find next steps:', e.message);
+      return null;
+    }
+
+    throw e;
+  }
+
+  await Promise.all(
+    nextStepChoices.map(async (step) => {
+      step.reward = step.reward = await estimateReward(step);
+    }),
+  );
+
+  await fs.writeFile(
+    path.join(outDir, 'next-steps.json'),
+    JSON.stringify(nextStepChoices, null, 2),
+  );
+
+  return nextStepChoices;
+}
+
+async function initBrowserContext(cacheDir: string): Promise<BrowserContext> {
   // Setup extensions
-  await fs.mkdir(cacheDir, { recursive: true });
   const extensionPaths = await downloadExtensions(cacheDir);
 
   // Initialize the browser
@@ -291,123 +364,104 @@ await (async () => {
     browserContext.addInitScript(initFunction),
     browserContext.exposeFunction('hashObjectSha256', hashObjectSha256),
     browserContext.exposeBinding('isElementVisible', isElementVisible, { handle: true }),
-    fs.mkdir(outDir),
   ]);
 
-  const triedJobs = new Set<string>();
+  return browserContext;
+}
+
+await (async () => {
+  const programName = 'web-form-crawler';
+  const maxJobCount = 100;
+  const priorityDecayFactor = 0.90;
+  const priorityRandomizationFactor = 0.05;
+  const minJobTime = 6000; // 6 seconds
+
+  const cacheDir = path.join(xdgCache || os.tmpdir(), programName);
+  const [outDir, ...landingURLs] = process.argv.slice(2);
+
+  const jobQueue = new mnemonist.Heap<JobSpec>((j1, j2) => Math.sign(j2.priority - j1.priority));
+
+  landingURLs.forEach((url) => jobQueue.push({
+    priority: 1000,
+    parents: [],
+    steps: [{ action: ['goto', url], reward: NaN }],
+  }));
+
+  // Stealth plugin - not sure if it actually helps but why not
+  const stealth = StealthPlugin();
+  // Workaround: https://github.com/berstend/puppeteer-extra/issues/858
+  stealth.enabledEvasions.delete('user-agent-override');
+  chromium.use(stealth);
+
   let jobCount = 0;
+  await fs.mkdir(cacheDir, { recursive: true });
+  let browserContext = await initBrowserContext(cacheDir);
+  await fs.mkdir(outDir);
 
   // Main loop
   while (jobCount < maxJobCount && jobQueue.size > 0) {
-    browserContext.pages().forEach((page) => page.close());
-    const page = await browserContext.newPage();
-    await browserContext.setOffline(false);
+    const job = jobQueue.pop()!;
+    const jobHash = hashObjectSha256(job.steps.map((s) => s.action));
+    const jobOutDir = path.join(outDir, jobHash);
+    const startTime = performance.now();
 
-    do {
-      const job = jobQueue.pop()!;
-      const jobHash = hashObjectSha256(job.steps.map((s) => s.action));
-
-      if (triedJobs.has(jobHash)) {
+    try {
+      await fs.mkdir(jobOutDir);
+    } catch (e) {
+      if ((e as any).code === 'EEXIST') {
         console.log('Skipping job because it has been tried before');
-        break;
+        continue;
       }
 
-      console.log('Current job:', job);
-      console.log(`Job ${jobHash} started`);
-      triedJobs.add(jobHash);
+      throw e;
+    }
 
-      // Do the steps
-      let navigationHistory: (string | null)[] = [];
+    let page: Page;
 
-      try {
-        console.log('Navigating...');
-        navigationHistory = await doSteps(page, job.steps);
-      } catch (e) {
-        if (e instanceof Error) {
-          console.log('Failed to recover page state:', e.message);
-          break;
-        }
+    try {
+      browserContext.pages().map((p) => p.close());
+      page = await browserContext.newPage();
+    } catch (e) {
+      console.error('Failed to setup new page:', e instanceof Error ? e.message : e);
 
-        throw e;
+      console.log('Restarting browser...');
+      await browserContext.close().catch(() => null);
+      browserContext = await initBrowserContext(cacheDir);
+
+      page = await browserContext.newPage();
+    }
+
+    console.log('Current job:', job);
+    console.log(`Job ${jobHash} started`);
+
+    // The main function -- no catch block because ignorable errors should have been handled in it
+    const nextStepChoices = await doJob(job, page, jobOutDir);
+
+    jobCount += 1;
+    let newJobCount = 0;
+
+    nextStepChoices?.forEach((step) => {
+      const newSteps = buildSteps(job.steps, step);
+
+      if (step.reward >= 0 && newSteps !== null) {
+        const priority = (step.reward + priorityRandomizationFactor * Math.random())
+                          * (priorityDecayFactor ** (job.parents.length + 1));
+
+        jobQueue.push({
+          priority,
+          parents: [...job.parents, jobHash],
+          steps: newSteps,
+        });
+
+        newJobCount += 1;
       }
+    });
 
-      // Dump job information for later inspection
-      const jobOutDir = path.join(outDir, jobHash);
+    console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
 
-      try {
-        console.log('Saving job information...');
-
-        const [pageHTML, pageTitle, calledSpecialAPIs, screenshot] = await Promise.all([
-          page.content(),
-          page.title(),
-          page.evaluate(() => (window as any).calledSpecialAPIs),
-          page.screenshot({ fullPage: true }),
-          browserContext.setOffline(true),
-        ]);
-
-        await fs.mkdir(jobOutDir);
-        jobCount += 1;
-
-        await Promise.all([
-          fs.writeFile(path.join(jobOutDir, 'page.html'), pageHTML),
-          fs.writeFile(path.join(jobOutDir, 'page.png'), screenshot),
-          fs.writeFile(
-            path.join(jobOutDir, 'job.json'),
-            JSON.stringify({ jobHash, pageTitle, ...job, navigationHistory, calledSpecialAPIs }, null, 2),
-          ),
-        ]);
-      } catch (e) {
-        if (e instanceof Error) {
-          console.log('Failed to save job information:', e.message);
-          break;
-        }
-
-        throw e;
-      }
-
-      // Search the webpage for forms
-      try {
-        console.log('Checking forms...');
-        await checkForms(page, jobOutDir);
-      } catch (e) {
-        if (e instanceof Error) {
-          console.log('Failed to check forms:', e.message);
-          break;
-        }
-
-        throw e;
-      }
-
-      // Find possible next steps
-      const possibleNextSteps = await page.evaluate(findNextSteps, DOM_VISITED_ATTR);
-      let newJobCount = 0;
-
-      await Promise.all(possibleNextSteps.map(async (step) => {
-        const reward = step.reward = await estimateReward(step);
-        const newSteps = buildSteps(job.steps, step);
-
-        if (reward > 0 && !!newSteps) {
-          jobQueue.push({
-            priority: reward,
-            parents: [...job.parents, jobHash],
-            steps: newSteps,
-          });
-
-          newJobCount += 1;
-        }
-      }));
-
-      // Save next step information for debugging
-      await fs.writeFile(
-        path.join(jobOutDir, 'next-steps.json'),
-        JSON.stringify(possibleNextSteps, null, 2),
-      );
-
-      console.log(`Job queue size: ${jobQueue.size} (${newJobCount} new)`);
-    // eslint-disable-next-line no-constant-condition
-    } while (false);
-
-    await Promise.all([page.close(), sleep(2000)]); // Avoid running too fast
+    // Throttle the crawler
+    const elapsed = performance.now() - startTime;
+    if (elapsed < minJobTime) await sleep(minJobTime - elapsed);
   }
 
   await browserContext.close();

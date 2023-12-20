@@ -7,7 +7,7 @@ export interface StepSpec {
     textContent: string;
     text: string;
   };
-  reward?: number;
+  reward: number;
 }
 
 export interface JobSpec {

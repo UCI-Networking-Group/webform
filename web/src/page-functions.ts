@@ -173,7 +173,8 @@ export async function patchNonFormFields() {
     let inputElement = null;
     let containerElement = null;
 
-    if ((inputElement = document.getElementById(labelElement.getAttribute('for') || ''))
+    if (!labelElement.hasAttribute('data-flag-visited')
+        && (inputElement = document.getElementById(labelElement.getAttribute('for') || ''))
         && (containerElement = getFirstCommonParent(inputElement, labelElement))
         && ['INPUT', 'SELECT', 'TEXTAREA'].includes(inputElement.tagName)
         && (inputElement as HTMLInputElement).form === null) {
@@ -209,24 +210,23 @@ export async function patchNonFormFields() {
   }
 }
 
-export function markInterestingElements(markAttr: string) {
+export function markInterestingElements() {
   for (const element of document.body.querySelectorAll('*')) {
-    if (['link', 'button', 'form'].includes(element.role || '')
-        || ['A', 'BUTTON', 'FORM'].includes(element.tagName)) {
-      element.setAttribute(markAttr, '');
+    if (['link', 'button', 'form', 'label'].includes(element.role || '')
+        || ['A', 'BUTTON', 'FORM', 'LABEL'].includes(element.tagName)) {
+      element.setAttribute('data-flag-visited', '');
     }
   }
 }
 
-export async function findNextSteps(markAttr: string): Promise<StepSpec[]> {
+export async function findNextSteps(): Promise<StepSpec[]> {
   // Ref: https://gist.github.com/iiLaurens/81b1b47f6259485c93ce6f0cdd17490a
   let clickableElements: Element[] = [];
 
-  for (const element of document.body.querySelectorAll<HTMLElement>(`*:not([${markAttr}])`)) {
-    // Skip disabled elements
-    if (element.ariaDisabled === 'true') continue;
-    // But do not skip hidden elements because we may still want to click on them
-
+  for (const element of document.body.querySelectorAll<HTMLElement>(
+    // Skip visited and disabled elements
+    '*:not([data-flag-visited]):not([disabled]):not([aria-disabled="true"])',
+  )) {
     if (!!(element).onclick
         || ['link', 'button'].includes(element.role || '')
         || ['A', 'BUTTON'].includes(element.tagName)) {
@@ -240,9 +240,6 @@ export async function findNextSteps(markAttr: string): Promise<StepSpec[]> {
   const possibleSteps: StepSpec[] = [];
 
   for (const element of clickableElements) {
-    const attributes = [...element.attributes].reduce((o, a) => Object.assign(o, { [a.name]: a.value }), {});
-    delete (attributes as any)[markAttr];
-
     const origin = {
       location: window.location.href,
       tagName: element.tagName,
@@ -253,15 +250,20 @@ export async function findNextSteps(markAttr: string): Promise<StepSpec[]> {
 
     if (element instanceof HTMLAnchorElement && element.onclick === null && !!element.href.match(/^https?:/)) {
       // A pure anchor element
+      const parsedUrl = new URL(element.href);
+      parsedUrl.hash = '';
+
       possibleSteps.push({
-        action: ['goto', element.href],
+        action: ['goto', parsedUrl.href],
         origin,
+        reward: NaN,
       });
     } else {
       // Something else that is clickable
       possibleSteps.push({
         action: ['click', await (window as any).hashObjectSha256(origin)],
         origin,
+        reward: NaN,
       });
     }
   }
