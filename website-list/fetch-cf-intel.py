@@ -1,40 +1,72 @@
-import CloudFlare
-import os
-import csv
-import dbm
+import argparse
 import json
+import os
+import sqlite3
 
-account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
-batch_size = 8
+import CloudFlare
 
-with (CloudFlare.CloudFlare() as cf,
-      open("top-1m.csv", "r") as fin,
-      dbm.open('cf-intel.db', 'c') as db):
 
-    csv_reader = csv.reader(fin)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("database", help="SQLite database path")
+    args = parser.parse_args()
 
-    while True:
-        domain_batch = []
+    con = sqlite3.connect(args.database)
+    con.execute('''
+    CREATE TABLE IF NOT EXISTS domain_info (
+        domain TEXT UNIQUE NOT NULL,
+        application TEXT NOT NULL,
+        content_categories TEXT NOT NULL,
+        additional_information TEXT NOT NULL,
+        type TEXT NOT NULL,
+        notes TEXT NOT NULL
+    ) STRICT
+    ''')
 
-        for _, domain in csv_reader:
-            if domain.encode() not in db:
-                domain_batch.append(domain)
+    account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+    batch_size = 8
 
-                if len(domain_batch) == batch_size:
-                    break
+    done_set = set()
 
-        if not domain_batch:
-            break
+    for domain in con.execute('SELECT domain FROM domain_info'):
+        done_set.add(domain)
 
-        print("Batch:", ", ".join(domain_batch))
+    with CloudFlare.CloudFlare() as cf:
+        cur = con.execute('''
+        SELECT domain
+        FROM tranco_list t
+        WHERE NOT EXISTS(SELECT NULL FROM domain_info d WHERE t.domain = d.domain)
+        ORDER BY ranking
+        ''')
 
-        params = [("domain", d) for d in domain_batch]
-        answers = cf.accounts.intel.domain.bulk.get(account_id, params=params)
+        while True:
+            domain_batch = [i[0] for i in cur.fetchmany(batch_size)]
 
-        for answer in answers:
-            domain = answer["domain"]
-            db[domain] = json.dumps(answer)
+            if not domain_batch:
+                break
 
-        print("Progress:", len(db))
+            print("Batch:", ", ".join(domain_batch))
 
-print("Done!")
+            params = [("domain", d) for d in domain_batch]
+            answers = cf.accounts.intel.domain.bulk.get(account_id, params=params)
+            rows = []
+
+            for ans in answers:
+                print(ans)
+                rows.append((
+                    ans["domain"],
+                    json.dumps(ans["application"]),
+                    json.dumps(ans.get("content_categories", [])),
+                    json.dumps(ans["additional_information"]),
+                    ans["type"],
+                    ans["notes"],
+                ))
+
+            con.executemany('INSERT INTO domain_info VALUES (?, ?, ?, ?, ?, ?)', rows)
+            con.commit()
+
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,47 @@
+from bs4 import BeautifulSoup
+from lingua import LanguageDetectorBuilder
+
+
+ISO_639_SET_1 = frozenset([
+    # From: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes
+    'aa', 'ab', 'ae', 'af', 'ak', 'am', 'an', 'ar', 'as', 'av',
+    'ay', 'az', 'ba', 'be', 'bg', 'bi', 'bm', 'bn', 'bo', 'br',
+    'bs', 'ca', 'ce', 'ch', 'co', 'cr', 'cs', 'cu', 'cv', 'cy',
+    'da', 'de', 'dv', 'dz', 'ee', 'el', 'en', 'eo', 'es', 'et',
+    'eu', 'fa', 'ff', 'fi', 'fj', 'fo', 'fr', 'fy', 'ga', 'gd',
+    'gl', 'gn', 'gu', 'gv', 'ha', 'he', 'hi', 'ho', 'hr', 'ht',
+    'hu', 'hy', 'hz', 'ia', 'id', 'ie', 'ig', 'ii', 'ik', 'io',
+    'is', 'it', 'iu', 'ja', 'jv', 'ka', 'kg', 'ki', 'kj', 'kk',
+    'kl', 'km', 'kn', 'ko', 'kr', 'ks', 'ku', 'kv', 'kw', 'ky',
+    'la', 'lb', 'lg', 'li', 'ln', 'lo', 'lt', 'lu', 'lv', 'mg',
+    'mh', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'my', 'na',
+    'nb', 'nd', 'ne', 'ng', 'nl', 'nn', 'no', 'nr', 'nv', 'ny',
+    'oc', 'oj', 'om', 'or', 'os', 'pa', 'pi', 'pl', 'ps', 'pt',
+    'qu', 'rm', 'rn', 'ro', 'ru', 'rw', 'sa', 'sc', 'sd', 'se',
+    'sg', 'si', 'sk', 'sl', 'sm', 'sn', 'so', 'sq', 'sr', 'ss',
+    'st', 'su', 'sv', 'sw', 'ta', 'te', 'tg', 'th', 'ti', 'tk',
+    'tl', 'tn', 'to', 'tr', 'ts', 'tt', 'tw', 'ty', 'ug', 'uk',
+    'ur', 'uz', 've', 'vi', 'vo', 'wa', 'wo', 'xh', 'yi', 'yo',
+    'za', 'zh', 'zu',
+])
+
+lang_detector = LanguageDetectorBuilder.from_all_languages().build()
+
+
+def check_html_language(html_code):
+    soup = BeautifulSoup(html_code, 'lxml')
+    lang_code = None
+
+    # Try to get language code from <html lang="xx">
+    if soup.html:
+        lang_code = soup.html.get('lang', '').split('-', 1)[0]
+
+    # Fallback to lingua-py
+    if lang_code not in ISO_639_SET_1:
+        lang_code = None
+        text = soup.get_text(' ', strip=True)
+
+        if result := lang_detector.detect_language_of(text):
+            lang_code = "guess:" + result.iso_code_639_1.name.lower()
+
+    return lang_code

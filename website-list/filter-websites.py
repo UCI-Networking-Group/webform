@@ -1,29 +1,44 @@
-import csv
+import argparse
 import json
-import dbm
-import tldextract
-import re
+import os
+import sqlite3
 
 
 def main():
-    with (open('cloudflare-domain-intel.csv', 'r', newline='') as fin,
-          dbm.open('domain-connection-info.db', 'r') as db):
-        for row in csv.DictReader(fin):
-            domain = row['domain']
+    parser = argparse.ArgumentParser()
+    parser.add_argument("database", help="SQLite database path")
+    args = parser.parse_args()
 
-            if int(row['tranco_82NJV_ranking']) > 100000:
-                break
+    con = sqlite3.connect(args.database)
+    cur = con.execute('''
+    SELECT t.domain, application, content_categories, url
+    FROM tranco_list t
+         JOIN domain_info d ON t.domain = d.domain
+         JOIN http_info h ON t.domain = h.domain
+    WHERE lang IN ('en', 'guess:en', NULL)
+          AND type = 'Apex domain'
+          AND additional_information->'suspected_malware_family' IS NULL
+          AND domain_has_changed = 0
+    ORDER BY ranking;
+    ''')
 
-            if domain.encode() not in db:
+    blocked_categories = {'CIPA', 'Adult Themes', 'Questionable Content', 'Blocked'}
+    visited_applications = set()
+
+    for domain, application_json, content_categories_json, url in cur:
+        application = json.loads(application_json)
+        content_categories = json.loads(content_categories_json)
+
+        if not blocked_categories.isdisjoint(i['name'] for i in content_categories):
+            continue
+
+        if application:
+            if application['name'] in visited_applications:
                 continue
 
-            conn_info = json.loads(db[domain])
-            tld_info = tldextract.extract(conn_info["final_url"])
-            is_english = re.match(r'\b(?:guess:)?eng?(_\w+)?\b', conn_info["lang"]) is not None
+            visited_applications.add(application['name'])
 
-            if tld_info.registered_domain == domain and is_english:
-                print(domain, conn_info["init_url"])
-
+        print(domain, url)
 
 if __name__ == '__main__':
     main()
