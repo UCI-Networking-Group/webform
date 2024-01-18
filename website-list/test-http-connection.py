@@ -1,11 +1,14 @@
+import argparse
 from concurrent.futures import ThreadPoolExecutor
+import socket
+import sqlite3
+from urllib.parse import urlsplit
 
 import requests
-import urllib3
-import sqlite3
-import argparse
 import tldextract
-from urllib.parse import urlsplit
+import tqdm
+import urllib3
+
 from langutil import check_html_language
 
 
@@ -20,30 +23,32 @@ def test_domain(domain):
 
     for real_domain in domain, "www." + domain:
         try:
+            ip = socket.gethostbyname(real_domain)
+        except socket.gaierror:
+            continue
+
+        try:
             init_url = f"http://{real_domain}"
 
-            with requests.get(init_url, headers=headers, timeout=10, stream=True) as req:
-                if req.raw._connection.sock:
-                    ip, _ = req.raw._connection.sock.getpeername()
-                    info['ip'] = ip
-                else:
-                    continue
+            req = requests.get(init_url, headers=headers, timeout=10)
+            req.raise_for_status()
 
-                if not req.headers.get('Content-Type', '').startswith('text/html;'):
-                    continue
+            if not req.headers.get('Content-Type', '').startswith('text/html'):
+                continue
 
-                req.raise_for_status()
-                content = req.content
-                redirected_url = req.url
+            content = req.content
 
-                info['url'] = init_url
-                info['redirected_url'] = urlsplit(redirected_url, allow_fragments=False)._replace(query='').geturl()
-                info['domain_has_changed'] = tldextract.extract(redirected_url).registered_domain != domain
-                info['redirected_url'] = req.url
-
-            break
         except (requests.exceptions.RequestException, urllib3.exceptions.LocationParseError, OSError):
-            pass
+            continue
+
+        info.update({
+            'ip': ip,
+            'url': init_url,
+            'redirected_url': urlsplit(req.url, allow_fragments=False)._replace(query='').geturl(),
+            'domain_has_changed': tldextract.extract(req.url).registered_domain != domain,
+        })
+
+        break
 
     if not content:
         return None
@@ -79,14 +84,13 @@ def main():
         domains_to_check.append(domain)
 
     with ThreadPoolExecutor() as executor:
-        for domain, info in zip(domains_to_check, executor.map(test_domain, domains_to_check)):
+        for domain, info in zip(tqdm.tqdm(domains_to_check), executor.map(test_domain, domains_to_check)):
             if info is not None:
                 con.execute('''
                     INSERT INTO http_info
                     VALUES (:domain, :ip, :url, :redirected_url, :lang, :domain_has_changed)
                 ''', info)
                 con.commit()
-                print(domain)
 
 
 if __name__ == '__main__':
