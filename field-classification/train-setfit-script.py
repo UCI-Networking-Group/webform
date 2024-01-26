@@ -13,23 +13,26 @@ from sklearn.metrics import classification_report
 
 LABELS = [
     'Address',
-    'AgeOrBirthday',
+    'DateOfBirth',
     'EmailAddress',
     'Ethnicity',
     'Fingerprints',
     'Gender',
     'GovernmentId',
     'LocationCityOrCoarser',
-    'PaymentCardInfo',
+    'BankAccountNumber',
     'PersonName',
     'PhoneNumber',
     'PostalCode',
     'UsernameOrOtherId',
     'TaxId',
     'Password',
+    'AgeOrAgeGroup',
+    'CitizenshipOrImmigrationStatus',
 ]
 
 BACKGROUND_LABELS = [
+    'SexualOrientation',
     'Irrelevant',
     'Other',
 ]
@@ -100,8 +103,7 @@ def main():
 
     # Create trainer
     training_args = TrainingArguments(
-        batch_size=16,
-        #num_iterations=20,
+        batch_size=20,
         sampling_strategy='undersampling',
         num_epochs=2,
         use_amp=True,
@@ -119,7 +121,7 @@ def main():
     predictions = model(train_dataset["text"])
     y_pred = predictions.numpy()
     y_true = np.array(train_dataset["label"])
-    print(classification_report(y_true, y_pred, target_names=LABELS))
+    print(classification_report(y_true, y_pred, target_names=LABELS, zero_division=np.nan))
 
     model.save_pretrained(os.path.join(args.output, "latest"), safe_serialization=True)
 

@@ -11,22 +11,24 @@ from more_itertools import chunked
 from setfit import SetFitModel, Trainer, TrainingArguments, sample_dataset
 
 
-FIELD_LABELS = [
+LABELS = [
     'Address',
-    'AgeOrBirthday',
+    'DateOfBirth',
     'EmailAddress',
     'Ethnicity',
     'Fingerprints',
     'Gender',
     'GovernmentId',
     'LocationCityOrCoarser',
-    'PaymentCardInfo',
+    'BankAccountNumber',
     'PersonName',
     'PhoneNumber',
     'PostalCode',
     'UsernameOrOtherId',
     'TaxId',
     'Password',
+    'AgeOrAgeGroup',
+    'CitizenshipOrImmigrationStatus',
 ]
 
 
@@ -49,7 +51,7 @@ def main():
 
             for row, full_dict in zip(pred, batch):
                 nz_indices, = row.nonzero(as_tuple=True)
-                labels = [FIELD_LABELS[i] for i in nz_indices]
+                labels = [LABELS[i] for i in nz_indices]
                 full_dict["label"] = labels
                 print(json.dumps(full_dict), file=fout)
 
