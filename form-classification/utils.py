@@ -74,18 +74,18 @@ class MyMarkupLMFeatureExtractor(MarkupLMFeatureExtractor):
 
 
 RAW_LABEL_MAP = {
-    'Demo Request Form': 'Contact Form',
-    'Event Registration Form': 'Reservation Form',
-    'Test Drive Booking Form': 'Reservation Form',
-    'Insurance Quote Form': 'Information Request Form',
-    'Gift Card Purchase Form': 'Payment Form',
     'Donation Form': 'Payment Form',
 
+    'Special Needs Service Request Form': 'Service Application Form',
+
+    'Appointment Form': 'Reservation Form',
+
+    'Unknown': None,
     'Filter Form': None,
     'Search Form': None,
     'Age Verification Form': None,
     'Location Search Form': None,
-    'Unknown': None,
+    'Location Selection Form': None,
 }
 
 LABELS = [
@@ -94,7 +94,7 @@ LABELS = [
     'Account Recovery Form',
     'Payment Form',
     'Role Application Form',
-    'Financial Application Form',
+    'Service Application Form',
     'Subscription Form',
     'Reservation Form',
     'Contact Form',
@@ -130,7 +130,8 @@ def load_html_string(example, root_dir):
         n_votes = len(votes)
         vote_counter = Counter(RAW_LABEL_MAP.get(i, i) for i in votes)
 
-        if any((k and k not in LABELS) for k in vote_counter):
+        if (vote_counter.most_common(1)[0][1] <= n_votes // 2
+            or any((k and k not in LABELS) for k in vote_counter)):
             returned_obj['label'] = None
         else:
             returned_obj['label'] = [vote_counter[i] / n_votes for i in LABELS]

@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -33,17 +34,17 @@ Classify the form into one of the following categories:
 - "Account Recovery Form": For retrieving or resetting forgotten account credentials.
 - "Payment Form": For financial transactions, such as bill payments, online purchases or donations.
 - "Role Application Form": For applications such as jobs, school admissions, volunteer opportunities, or professional certificates.
-- "Financial Application Form": For applying for financial services or benefits, such as loans, credit cards, or financial aid.
+- "Service Application Form": For applications to obtain services such as credit cards, loans, financial aid, insurance, or government programs.
 - "Subscription Form": For users to sign up for regular updates, including newsletters, mailing lists, or similar communication channels.
-- "Reservation Form": For service reservations, appointment bookings, event registrations, or similar.
-- "Contact Form": For users to initiate communication with website teams, including business inquiries, service requests, or reporting issues.
+- "Reservation Form": For users to make reservations for services or resources, book appointments, register for events, or similar.
+- "Contact Form": For users to initiate communication with website teams, including business inquiries, customer support, or reporting issues.
 - "Content Submission Form": For submitting user-generated content like comments, reviews, or ratings, intended to be published on the website.
 - "Feedback Form": For collecting user opinions through surveys, polls, or ratings to gather feedback on website services.
-- "Information Request Form": For users to obtain private records, service or insurance quotes, or other information tailored to their needs.
+- "Information Request Form": For users to obtain private records, service quotes, or other information tailored to their needs.
 - "Search Form": Used to search or filter website content, typically featuring a search query field and/or filter options.
 - "Configuration Form": For customizing the user experience on the website, like setting preferences for cookies, language, or display settings.
 
-Please choose the category that best describe the form.
+Please choose the category that best describes the form.
 If none of the above categories accurately describe the form, suggest a new category.
 If the information is insufficient to make a classification, label it as "Unknown".
 
@@ -63,7 +64,9 @@ def main():
     parser.add_argument("--target", type=int, default=1000,
                         help="How many forms to label")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--n_tries", type=int, default=5, help="Number of GPT calls for each form")
+    parser.add_argument("--n_tries", type=int, default=10, help="Number of GPT calls for each form")
+    parser.add_argument("--per-domain-limit", type=int, default=20,
+                        help="Maximum number of forms to label for each domain")
     args = parser.parse_args()
 
     client = OpenAI()
@@ -77,23 +80,33 @@ def main():
     weights = []
 
     if args.list:
-        cur = pd.read_csv(args.list).itertuples(index=False)
+        df = pd.read_csv(args.list, usecols=['domain', 'job_hash', 'form_filename', 'weight'])
+        cur = df.itertuples(index=False)
     else:
-        cur = con.execute(r'''
-            SELECT domain, job_hash, form_filename, weight
-            FROM
-                field_classification a
-                LEFT JOIN (
-                    SELECT 1.0 / count(*) weight, field_list
-                    FROM field_classification GROUP BY field_list
-                ) b
-                ON a.field_list = b.field_list
-            WHERE a.field_list REGEXP
-                '"(Address|EmailAddress|GovernmentId|BankAccountNumber|PersonName|PhoneNumber|UsernameOrOtherId|TaxId)"'
-        ''')
         # cur = con.execute(r'''
-        # SELECT domain, job_hash, form_filename, 1.0 FROM form_classification_gpt_freeform WHERE form_type LIKE '%Authentication%'
+        #     SELECT domain, job_hash, form_filename, weight
+        #     FROM
+        #         field_classification a
+        #         LEFT JOIN (
+        #             SELECT 1.0 / count(*) weight, field_list
+        #             FROM field_classification GROUP BY field_list
+        #         ) b
+        #         ON a.field_list = b.field_list
+        #     WHERE a.field_list REGEXP
+        #         '"(Address|EmailAddress|GovernmentId|BankAccountNumber|PersonName|PhoneNumber|UsernameOrOtherId|TaxId)"'
         # ''')
+
+        # cur = con.execute(r'''
+        # SELECT domain, job_hash, form_filename, 1.0 FROM form_classification_gpt_bak WHERE
+        #     annotations LIKE '%Information Request Form%'
+        #     ORDER BY RANDOM()
+        # ''')
+        cur = con.execute(r'''
+        SELECT domain, job_hash, form_filename, 1.0 FROM form_classification WHERE
+            form_type = 'Unknown'
+            ORDER BY RANDOM()
+        ''')
+
 
     for row in cur:
         *form_spec, weight = row
@@ -112,15 +125,19 @@ def main():
         annotations TEXT,
         form_html_hash TEXT UNIQUE NOT NULL
     ) STRICT''')
+
     cur = con.execute('''
         SELECT domain, job_hash, form_filename, form_html_hash FROM form_classification_gpt
     ''')
+
+    domain_counter = Counter()
     done_forms = set()
     done_hashes = set()
 
     for domain, job_hash, form_filename, form_html_hash in cur:
         done_forms.add((domain, job_hash, form_filename))
         done_hashes.add(form_html_hash)
+        domain_counter[domain] += 1
 
     for descriptor in selected_forms:
         if descriptor in done_forms:
@@ -128,6 +145,10 @@ def main():
 
         domain, job_hash, form_filename = descriptor
         job_dir = root_dir / domain / job_hash
+
+        if domain_counter[domain] >= args.per_domain_limit:
+            logging.info('Skip due to domain limit')
+            continue
 
         with open(job_dir / form_filename, encoding='utf-8') as fin:
             form_data = json.load(fin)
@@ -186,6 +207,7 @@ def main():
                     (domain, job_hash, form_filename, json.dumps(annotations, separators=(',', ':')), checksum))
         con.commit()
 
+        domain_counter[domain] += 1
         done_hashes.add(checksum)
 
 
