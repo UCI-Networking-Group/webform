@@ -1,13 +1,10 @@
 import argparse
-import json
 import os
-import tempfile
 from collections import Counter
-from zipfile import ZipFile
 
 import numpy as np
 from datasets import Dataset
-from doccano_client import DoccanoClient
+from label_studio_sdk import Client
 from setfit import SetFitModel, Trainer, TrainingArguments
 from sklearn.metrics import classification_report
 
@@ -29,10 +26,15 @@ LABELS = [
     'Password',
     'AgeOrAgeGroup',
     'CitizenshipOrImmigrationStatus',
+    'BusinessInfo',
+    'MilitaryStatus',
 ]
 
 BACKGROUND_LABELS = [
     'SexualOrientation',
+]
+
+NEGATIVE_LABELS = [
     'Irrelevant',
     'Other',
 ]
@@ -40,26 +42,14 @@ BACKGROUND_LABELS = [
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("url", help="Doccano URL")
-    parser.add_argument("project_id", type=int, help="Project ID")
+    parser.add_argument("url", help="Label Studio URL")
+    parser.add_argument("project_id", help="Project ID")
+    parser.add_argument("-P", "--api-key", required=True, help="Password")
     parser.add_argument("-o", "--output", help="Model output path")
-    parser.add_argument("-U", "--username", required=True, help="Username")
-    parser.add_argument("-P", "--password", required=True, help="Password")
     args = parser.parse_args()
 
-
-    client = DoccanoClient(args.url)
-    client.login(username=args.username, password=args.password)
-
-    samples = []
-
-    with tempfile.TemporaryDirectory() as tempdir:
-        zip_path = client.download(args.project_id, "JSONL", True, tempdir)
-
-        with ZipFile(zip_path) as zipf:
-            with zipf.open(f"{args.username}.jsonl") as fin:
-                for line in fin:
-                    samples.append(json.loads(line))
+    ls = Client(url=args.url, api_key=args.api_key)
+    project = ls.get_project(args.project_id)
 
     dataset = {
         "text": [],
@@ -68,26 +58,40 @@ def main():
 
     label_counter = Counter()
 
-    for item in samples:
-        text = item['text']
-        labels = item["label"]
+    for task in project.export_tasks():
+        annotations = task['annotations']
+        assert len(annotations) == 1
+        annotation_results = annotations[0]['result']
+        assert len(annotation_results) == 1
+
+        text = task['data']['text']
+        labels = annotation_results[0]['value']['choices']
+
         label_array = [0] * len(LABELS)
-        label_counter.update(labels)
 
         assert len(labels) > 0
 
-        if labels[0] in BACKGROUND_LABELS:
-            assert len(labels) == 1
-            label_array = [0] * len(LABELS)
-        else:
-            for l in labels:
+        for l in labels:
+            if l in NEGATIVE_LABELS:
+                assert len(labels) == 1
+                continue
+
+            if l in BACKGROUND_LABELS:
+                continue
+
+            if l in LABELS:
                 label_array[LABELS.index(l)] = 1
+                label_counter[l] += 1
+            else:
+                raise ValueError(f"Unknown label {l}")
 
         dataset["text"].append(text)
         dataset["label"].append(label_array)
 
-    print(label_counter)
+        if sum(label_array) == 0:
+            label_counter["NEGATIVE"] += 1
 
+    print(label_counter)
     train_dataset = Dataset.from_dict(dataset)
 
     model = SetFitModel.from_pretrained(

@@ -2,34 +2,10 @@
 
 import argparse
 import json
-from pathlib import Path
 
 import tqdm
-import torch
-from datasets import load_dataset
 from more_itertools import chunked
-from setfit import SetFitModel, Trainer, TrainingArguments, sample_dataset
-
-
-LABELS = [
-    'Address',
-    'DateOfBirth',
-    'EmailAddress',
-    'Ethnicity',
-    'Fingerprints',
-    'Gender',
-    'GovernmentId',
-    'LocationCityOrCoarser',
-    'BankAccountNumber',
-    'PersonName',
-    'PhoneNumber',
-    'PostalCode',
-    'UsernameOrOtherId',
-    'TaxId',
-    'Password',
-    'AgeOrAgeGroup',
-    'CitizenshipOrImmigrationStatus',
-]
+from setfit import SetFitModel
 
 
 def main():
@@ -51,12 +27,9 @@ def main():
 
             for row, full_dict in zip(pred, batch):
                 nz_indices, = row.nonzero(as_tuple=True)
-                labels = [LABELS[i] for i in nz_indices]
+                labels = [model.labels[i] for i in nz_indices]
                 full_dict["label"] = labels
                 print(json.dumps(full_dict), file=fout)
-
-            #data = json.loads(line)
-            #text = data['text']
 
 
 if __name__ == '__main__':
