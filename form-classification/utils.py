@@ -75,17 +75,26 @@ class MyMarkupLMFeatureExtractor(MarkupLMFeatureExtractor):
 
 RAW_LABEL_MAP = {
     'Donation Form': 'Payment Form',
-
-    'Special Needs Service Request Form': 'Service Application Form',
+    'Gift Card Purchase Form': 'Payment Form',
 
     'Appointment Form': 'Reservation Form',
+    'Schedule a meeting Form': 'Reservation Form',
+    'Schedule Form': 'Reservation Form',
+    'Schedule a Demo Form': 'Reservation Form',
+    'Webinar Registration Form': 'Reservation Form',
+
+    'Insurance Application Form': 'Financial Application Form',
+    'Insurance Claim Form': 'Financial Application Form',
 
     'Unknown': None,
+    'Other Form': None,
     'Filter Form': None,
     'Search Form': None,
     'Age Verification Form': None,
     'Location Search Form': None,
     'Location Selection Form': None,
+    'Order Tracking Form': None,
+    'Order Status Form': None,
 }
 
 LABELS = [
@@ -94,13 +103,14 @@ LABELS = [
     'Account Recovery Form',
     'Payment Form',
     'Role Application Form',
-    'Service Application Form',
+    'Financial Application Form',
+    #'Service Application Form',
     'Subscription Form',
     'Reservation Form',
     'Contact Form',
     'Content Submission Form',
-    'Feedback Form',
-    'Information Request Form',
+    #'Feedback Form',
+    #'Information Request Form',
 ]
 
 

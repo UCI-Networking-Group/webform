@@ -5,7 +5,7 @@ import sqlite3
 import numpy as np
 from datasets import Dataset
 from scipy.special import expit
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+from sklearn.metrics import accuracy_score, classification_report
 from transformers import (MarkupLMForSequenceClassification, MarkupLMProcessor, MarkupLMTokenizerFast, Trainer,
                           TrainingArguments)
 from utils import LABELS, MyMarkupLMFeatureExtractor, load_html_string
@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
     parser.add_argument("--base-model", type=str, default="microsoft/markuplm-base", help="Base model")
+    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
     parser.add_argument("--learning-rate", type=float, default=2e-5, help="Learning rate")
     args = parser.parse_args()
 
@@ -41,7 +42,7 @@ def main():
     processor = MarkupLMProcessor(feature_extractor, tokenizer)
 
     def preprocess_function(examples):
-        return processor(examples["html_strings"], truncation=True, padding=True)
+        return processor(examples["html_strings"], truncation=True, padding='max_length')
 
     ds_processed = ds_form.map(preprocess_function, batched=True, num_proc=args.nproc)
     ds = ds_processed.train_test_split(test_size=0.2, seed=args.seed)
@@ -58,7 +59,7 @@ def main():
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        num_train_epochs=10,
+        num_train_epochs=args.epochs,
         weight_decay=0.01,
         evaluation_strategy="epoch",
         save_strategy="epoch",
@@ -84,8 +85,6 @@ def main():
 
         metrics = {
             'accuracy': accuracy_score(hard_labels, hard_predicts),
-            'roc_auc/macro': roc_auc_score(hard_labels, proba, average='macro'),
-            'roc_auc/micro': roc_auc_score(hard_labels, proba, average='micro'),
         }
 
         for key1, d1 in cls_report.items():

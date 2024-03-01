@@ -28,31 +28,31 @@ HTML Code of the Web Form:
 {html_code}
 ```
 
-Classify the form into one of the following categories:
-- "Account Registration Form": For creating new user accounts.
+Classify the web form based on its intended usage.
+
+Here are the possible categories for classification:
+- "Account Registration Form": For creating new online user accounts.
 - "Account Login Form": For users to log into existing accounts using their credentials.
 - "Account Recovery Form": For retrieving or resetting forgotten account credentials.
 - "Payment Form": For financial transactions, such as bill payments, online purchases or donations.
-- "Role Application Form": For applications such as jobs, school admissions, volunteer opportunities, or professional certificates.
-- "Service Application Form": For applications to obtain services such as credit cards, loans, financial aid, insurance, or government programs.
-- "Subscription Form": For users to sign up for regular updates, including newsletters, mailing lists, or similar communication channels.
-- "Reservation Form": For users to make reservations for services or resources, book appointments, register for events, or similar.
-- "Contact Form": For users to initiate communication with website teams, including business inquiries, customer support, or reporting issues.
+- "Financial Application Form": For applying to financial services like credit cards, loans, financial aid, insurance, investment accounts.
+- "Role Application Form": For applying to positions such as employment, school admissions, or volunteer opportunities.
+- "Subscription Form": For users to sign up for newsletters, mailing lists, or similar channels of periodic updates.
+- "Reservation Form": For users to book services, schedule appointments, register for events, or similar.
+- "Contact Form": For users to send private messages, inquiries, or feedback to the website owner.
 - "Content Submission Form": For submitting user-generated content like comments, reviews, or ratings, intended to be published on the website.
-- "Feedback Form": For collecting user opinions through surveys, polls, or ratings to gather feedback on website services.
-- "Information Request Form": For users to obtain private records, service quotes, or other information tailored to their needs.
 - "Search Form": Used to search or filter website content, typically featuring a search query field and/or filter options.
 - "Configuration Form": For customizing the user experience on the website, like setting preferences for cookies, language, or display settings.
 
 Please choose the category that best describes the form.
 If none of the above categories accurately describe the form, suggest a new category.
-If the information is insufficient to make a classification, label it as "Unknown".
+If the information is insufficient to make a confident classification, label it as "Unknown".
 
 Format the response in JSON with one key "Classification".
 '''.strip()
 
-MAX_HTML_TOKENS = 4096
-MAX_PROMPT_TOKENS = 8192
+MAX_HTML_TOKENS = 8000
+MAX_PROMPT_TOKENS = 16000
 
 
 def main():
@@ -65,7 +65,7 @@ def main():
                         help="How many forms to label")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--n_tries", type=int, default=10, help="Number of GPT calls for each form")
-    parser.add_argument("--per-domain-limit", type=int, default=20,
+    parser.add_argument("--per-domain-limit", type=int, default=10,
                         help="Maximum number of forms to label for each domain")
     args = parser.parse_args()
 
@@ -83,30 +83,18 @@ def main():
         df = pd.read_csv(args.list, usecols=['domain', 'job_hash', 'form_filename', 'weight'])
         cur = df.itertuples(index=False)
     else:
-        # cur = con.execute(r'''
-        #     SELECT domain, job_hash, form_filename, weight
-        #     FROM
-        #         field_classification a
-        #         LEFT JOIN (
-        #             SELECT 1.0 / count(*) weight, field_list
-        #             FROM field_classification GROUP BY field_list
-        #         ) b
-        #         ON a.field_list = b.field_list
-        #     WHERE a.field_list REGEXP
-        #         '"(Address|EmailAddress|GovernmentId|BankAccountNumber|PersonName|PhoneNumber|UsernameOrOtherId|TaxId)"'
-        # ''')
-
-        # cur = con.execute(r'''
-        # SELECT domain, job_hash, form_filename, 1.0 FROM form_classification_gpt_bak WHERE
-        #     annotations LIKE '%Information Request Form%'
-        #     ORDER BY RANDOM()
-        # ''')
         cur = con.execute(r'''
-        SELECT domain, job_hash, form_filename, 1.0 FROM form_classification WHERE
-            form_type = 'Unknown'
-            ORDER BY RANDOM()
+            SELECT domain, job_hash, form_filename, weight
+            FROM
+                field_classification a
+                LEFT JOIN (
+                    SELECT 1.0 / count(*) weight, field_list
+                    FROM field_classification GROUP BY field_list
+                ) b
+                ON a.field_list = b.field_list
+            WHERE a.field_list REGEXP
+                '"(Address|EmailAddress|GovernmentId|BankAccountNumber|PersonName|PhoneNumber|UsernameOrOtherId|TaxId)"'
         ''')
-
 
     for row in cur:
         *form_spec, weight = row
@@ -181,6 +169,7 @@ def main():
 
         full_response = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
+            #model="gpt-4-0125-preview",
             response_format={"type": "json_object"},
             seed=args.seed,
             n=args.n_tries,

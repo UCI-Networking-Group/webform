@@ -82,6 +82,7 @@ def main():
         domain TEXT NOT NULL,
         job_hash TEXT NOT NULL,
         form_filename TEXT NOT NULL,
+        form_type TEXT NOT NULL,
         scores TEXT NOT NULL,
         UNIQUE(job_hash, form_filename)
     ) STRICT''')
@@ -101,17 +102,22 @@ def main():
 
             for html_string, scores in zip(html_strings, output_list):
                 dict_scores = {model.config.id2label[i]: score for i, score in enumerate(scores)}
+
+                form_type = max(dict_scores, key=dict_scores.get)
+                if dict_scores[form_type] < 0.5:
+                    form_type = 'Unknown'
+
                 scores_json = json.dumps(dict_scores, separators=(',', ':'))
 
                 db_rows = []
 
                 while ds_idx < len(ds_form) and ds_form[ds_idx]['html_strings'] == html_string:
                     desc = [ds_form[ds_idx][k] for k in ('domain', 'job_hash', 'form_filename')]
-                    db_rows.append([*desc, scores_json])
+                    db_rows.append([*desc, form_type, scores_json])
                     ds_idx += 1
 
                 assert len(db_rows) > 0
-                con.executemany('INSERT INTO form_classification VALUES (?, ?, ?, ?)', db_rows)
+                con.executemany('INSERT INTO form_classification VALUES (?, ?, ?, ?, ?)', db_rows)
                 con.commit()
                 pbar.update(len(db_rows))
 
