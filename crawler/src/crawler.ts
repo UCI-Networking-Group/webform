@@ -340,6 +340,7 @@ async function initBrowserContext(cacheDir: string): Promise<BrowserContext> {
   // Initialize the browser
   const userDataDir = path.join(cacheDir, `user-data-${process.pid}`);
   await rimraf(userDataDir);
+  process.on('exit', () => rimraf.sync(userDataDir));
   const browserContext = await chromium.launchPersistentContext(userDataDir, {
     args: [
       '--disable-extensions-except=' + extensionPaths.join(','),
