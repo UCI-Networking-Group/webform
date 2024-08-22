@@ -4,9 +4,10 @@ import argparse
 import csv
 import json
 import sqlite3
-import numpy as np
-from statistics import NormalDist
 from itertools import zip_longest
+from statistics import NormalDist
+
+import numpy as np
 
 
 def main():
