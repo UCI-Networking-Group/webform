@@ -46,7 +46,7 @@ def main():
             for jobdir in sitedir.iterdir():
                 job_id = (sitedir.name, jobdir.name)
 
-                if next(jobdir.glob('form-*.json'), None) and job_id not in done_set:
+                if job_id not in done_set:
                     task_dict[jobdir] = job_id
 
     with ProcessPoolExecutor() as executor:
