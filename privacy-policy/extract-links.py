@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 
 import argparse
+import functools
 import json
+import multiprocessing as mp
 import os
+import queue
 import re
 import sqlite3
+import urllib.parse as urlparse
 import warnings
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
 
 import numpy as np
-import torch
+import tldextract
 import tqdm
+import whatwg_url
 from bs4 import BeautifulSoup
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-from werkzeug.urls import url_fix
 
 SEED_PHRASES = [
     'privacy policy',
@@ -32,138 +33,183 @@ RePhraseMatcher = re.compile(
     re.IGNORECASE
 )
 
+def cpu_worker(args: tuple[mp.Queue, Path, str], match_threshold=0.75):
+    gpu_queue, rootdir, domain = args
+    conn, conn_other = mp.Pipe()
 
-class TextScorer:
-    def __init__(self, device=None):
-        self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
-        self.seed_embeddings = self.model.encode(SEED_PHRASES)
-        self.memory = {}
+    @functools.cache
+    def get_job_info(job_hash: str) -> tuple[str, list[str]]:
+        with open(rootdir / domain / job_hash / "job.json", "rb") as fin:
+            job_info = json.load(fin)
 
-    def __call__(self, all_texts):
-        new_texts = sorted({t for t in all_texts if t not in self.memory})
+        page_url = next(u for u in reversed(job_info["navigationHistory"]) if u)
+        parents = job_info['parents']
 
-        if new_texts:
-            new_embeddings = self.model.encode(new_texts)
-            new_scores = cosine_similarity(new_embeddings, self.seed_embeddings).max(1)
-            self.memory.update(zip(new_texts, new_scores))
+        return page_url, parents
 
-        return np.fromiter((self.memory[t] for t in all_texts), dtype=float)
+    @functools.cache
+    def check_page(job_hash: str):
+        page_url, _ = get_job_info(job_hash)
 
+        with open(rootdir / domain / job_hash / "page.html", "rb") as fin:
+            soup = BeautifulSoup(fin, 'lxml')
 
-def check_privacy_policy_soup(scorer: TextScorer, soup: BeautifulSoup, page_url: str):
-    unique_hrefs = set()
+        return check_privacy_policy_soup(soup, page_url)
 
-    for a_elem in soup.find_all('a'):
-        text = a_elem.get_text().strip()
+    def check_privacy_policy_soup(soup: BeautifulSoup, page_url: str) -> tuple[str, str] | None:
+        core_domain = tldextract.extract(page_url).domain
 
-        try:
-            href = urljoin(page_url, a_elem.get('href'))
-        except ValueError:
-            continue
+        # Collect unique pairs of (text, url)
+        unique_hrefs = set()
 
-        if urlparse(href).scheme in ('http', 'https'):
-            unique_hrefs.add((text, url_fix(href)))
+        for a_elem in soup.find_all('a', {"href": True}):
+            text = a_elem.get_text().strip()
 
-    if unique_hrefs:
-        texts, urls = zip(*unique_hrefs)
-        features = texts
+            try:
+                full_url = whatwg_url.parse_url(a_elem.get('href'), base=page_url,
+                                                encoding=soup.original_encoding or 'utf-8')
+            except whatwg_url.UrlParserError:
+                continue
 
-        for _ in range(2):
-            sim_score = scorer(features)
-            bm_idx = sim_score.argmax()
+            if full_url.scheme in ('http', 'https'):
+                unique_hrefs.add((text, full_url.href))
 
-            if sim_score[bm_idx] > 0.75:
-                return texts[bm_idx], urls[bm_idx]
+        if not unique_hrefs:
+            return None
 
-            # Next try use the last part of the URL as a feature
-            features = []
+        unique_hrefs = sorted(unique_hrefs)
 
-            for u in urls:
-                last_part = urlparse(u).path.rstrip('/').rsplit('/', 1)[-1]
-                last_part = os.path.splitext(last_part)[0]
-                features.append(last_part)
+        features = []
+        scores = np.zeros(len(unique_hrefs))
 
-        # As last resort, do a fuzzy match
-        for text, url in unique_hrefs:
+        for i, (text, url) in enumerate(unique_hrefs):
+            # If containing seed phrases, set the score to at least match_threshold
             if RePhraseMatcher.search(text) or RePhraseMatcher.search(url):
-                return text, url
+                scores[i] = match_threshold
 
-    return None, None
+            # Use the link text as features
+            features.append(text)
 
+            # Use the last part of URL as features
+            last_part = os.path.basename(urlparse.urlsplit(url).path.rstrip('/'))
+            last_part = urlparse.unquote(last_part)
+            last_part = os.path.splitext(last_part)[0]
+            features.append(last_part)
 
-def check_website(rootdir: Path, domain: str):
-    global scorer
+        # Get text similarity scores
+        gpu_queue.put((conn_other, features))
+        sim_scores: np.ndarray = conn.recv()
+        scores = np.maximum(scores, sim_scores.reshape(-1, 2).max(1))
 
-    _page_info_catch = {}
+        # Prioritize links that are in the same domain
+        domain_match = np.fromiter(
+            (tldextract.extract(url).domain == core_domain for _, url in unique_hrefs),
+            dtype=bool,
+        )
 
-    def get_page(job_hash):
-        if job_hash not in _page_info_catch:
-            with open(rootdir / domain / job_hash / "job.json", "rb") as fin:
-                job_info = json.load(fin)
+        for mask in domain_match, ~domain_match:
+            bm_idx = (scores * mask).argmax()
 
-            with open(rootdir / domain / job_hash / "page.html", "rb") as fin:
-                content = fin.read()
+            if scores[bm_idx] >= match_threshold:
+                return unique_hrefs[bm_idx]
 
-            page_url = next(u for u in reversed(job_info["navigationHistory"]) if u)
-            soup = BeautifulSoup(content, 'lxml')
-            link_text, url = check_privacy_policy_soup(scorer, soup, page_url)
-
-            _page_info_catch[job_hash] = page_url, None
-
-            if url is not None:
-                _page_info_catch[job_hash] = page_url, ('PAGE', link_text, url)
-            elif job_info['parents']:
-                _, pp_info = get_page(job_info['parents'][-1])
-
-                if pp_info is not None:
-                    _page_info_catch[job_hash] = page_url, ('PARENT', pp_info[1], pp_info[2])
-
-        return _page_info_catch[job_hash]
+        return None
 
     def _check():
-        domain_dir = rootdir / domain
         all_results = {}
 
-        for job_dir in domain_dir.iterdir():
+        for job_dir in (rootdir / domain).iterdir():
             job_hash = job_dir.name
+            form_files = list(job_dir.glob('form-*.json'))
 
-            for form_file in job_dir.glob('form-*.json'):
-                page_url, page_pp_info = get_page(job_hash)
+            if form_files:
+                page_url, parents = get_job_info(job_hash)
 
-                with open(form_file, "rb") as fin:
+            for f in form_files:
+                with f.open("rb") as fin:
                     form_info = json.load(fin)
 
                 form_html = form_info['element']['outerHTML']
                 form_soup = BeautifulSoup(form_html, 'lxml')
 
-                link_text, url = check_privacy_policy_soup(scorer, form_soup, page_url)
+                # Check the form for links
+                if href := check_privacy_policy_soup(form_soup, page_url):
+                    all_results[domain, job_hash, f.name] = ('FORM', *href)
+                    continue
 
-                if url:
-                    all_results[domain, job_hash, form_file.name] = 'FORM', link_text, url
-                elif page_pp_info:
-                    all_results[domain, job_hash, form_file.name] = page_pp_info
+                # Check current pages for links
+                if href := check_page(job_hash):
+                    all_results[domain, job_hash, f.name] = ('PAGE', *href)
+                    continue
+
+                # Check parent pages for links
+                for parent_job_hash in parents[::-1]:
+                    if href := check_page(parent_job_hash):
+                        all_results[domain, job_hash, f.name] = ('PARENT', *href)
+                        break
                 else:
-                    all_results[domain, job_hash, form_file.name] = None
+                    # No privacy policy link found
+                    all_results[domain, job_hash, f.name] = ('UNKNOWN', None, None)
 
         return all_results
 
     return _check()
 
 
-def init_proc():
-    global scorer
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
+def gpu_worker(gpu_queue: mp.Queue, worker_index: int, model: str):
+    warnings.filterwarnings('ignore', module='transformers.utils')
+
+    # Disable parallelism in ML libraries
+    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+
+    # Somehow importing torch at top-level cause a major slowdown...
+    # pylint: disable=import-outside-toplevel
+    import torch
+    from sentence_transformers import SentenceTransformer
+
+    torch.set_num_threads(1)
+
     gpu_count = torch.cuda.device_count()
-    scorer = TextScorer(device=('cuda:' + str(os.getpid() % gpu_count)) if gpu_count else 'cpu')
+
+    model = SentenceTransformer(model, device=f'cuda:{worker_index % gpu_count}')
+    seed_embeddings = model.encode(SEED_PHRASES)
+    memory = {}
+
+    while task_tuple := gpu_queue.get():
+        batch = [task_tuple]
+
+        while True:
+            try:
+                task_tuple = gpu_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            batch.append(task_tuple)
+
+        all_texts = [t for _, tl in batch for t in tl]
+        new_texts = list({t for t in all_texts if t not in memory})
+
+        if new_texts:
+            new_embeddings = model.encode(new_texts)
+            # Convert to float16 to mitigate numerical instability
+            new_scores = cosine_similarity(new_embeddings, seed_embeddings).max(1).astype(np.float16)
+            memory.update(zip(new_texts, new_scores))
+
+        for conn, features in batch:
+            sim_score = np.fromiter((memory[t] for t in features), dtype=float)
+            conn.send(sim_score)
+            conn.close()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("rootdir")
-    parser.add_argument("--nproc", type=int, default=min(16, os.cpu_count()))
+    parser.add_argument("--n_cpu", type=int, default=os.cpu_count())
+    parser.add_argument("--n_gpu", type=int, default=1)
+    parser.add_argument("--model", default='sentence-transformers/all-MiniLM-L6-v2')
     args = parser.parse_args()
-
-    rootdir = Path(args.rootdir)
 
     con = sqlite3.connect(args.rootdir.rstrip('/') + '.db')
 
@@ -178,25 +224,47 @@ def main():
         UNIQUE(job_hash, form_filename)
     ) STRICT''')
 
-    cur = con.execute("SELECT DISTINCT domain FROM page_language WHERE lang_code IN ('en', 'guess:en')")
-    all_domains = set(d for d, in cur)
+    cur = con.execute("SELECT DISTINCT domain FROM page_language")
+    all_domains = sorted({d for d, in cur})
+    n_domain = len(all_domains)
 
-    with ProcessPoolExecutor(args.nproc, initializer=init_proc) as executor:
-        pbar = tqdm.tqdm(total=len(all_domains), smoothing=0.01)
+    rootdir = Path(args.rootdir)
 
-        for results in executor.map(check_website, [rootdir] * len(all_domains), all_domains):
+    manager = mp.Manager()
+    gpu_queue = manager.Queue()
+
+    # Warm up: make sure the model is downloaded in one process
+    p = mp.Process(target=gpu_worker, args=(gpu_queue, 0, args.model))
+    p.start()
+    gpu_queue.put(None)
+    p.join()
+
+    # Create GPU workers
+    gpu_workers = []
+
+    for idx in range(args.n_gpu):
+        p = mp.Process(target=gpu_worker, args=(gpu_queue, idx, args.model))
+        gpu_workers.append(p)
+        p.start()
+
+    # Run CPU workers
+    with mp.pool.Pool(args.n_cpu) as pool:
+        tasks = pool.imap_unordered(cpu_worker, [(gpu_queue, rootdir, d) for d in all_domains])
+
+        for results in tqdm.tqdm(tasks, total=n_domain, smoothing=0.01):
             for (domain, job_hash, form_filename), pp_info in results.items():
-                if pp_info is None:
-                    pp_info = ('UNKNOWN', None, None)
-
                 con.execute(
                     'INSERT INTO privacy_policy_link VALUES (?, ?, ?, ?, ?, ?)',
                     (domain, job_hash, form_filename, *pp_info))
 
             con.commit()
-            pbar.update(1)
 
-        pbar.close()
+    # Gracefully shutdown GPU workers
+    for idx in range(args.n_gpu):
+        gpu_queue.put(None)
+
+    for p in gpu_workers:
+        p.join()
 
 
 if __name__ == '__main__':

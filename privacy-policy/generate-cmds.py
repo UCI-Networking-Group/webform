@@ -1,21 +1,8 @@
 import argparse
-import json
-import os
-import sqlite3
-import warnings
-from concurrent.futures import ProcessPoolExecutor
-from pathlib import Path
-from urllib.parse import urljoin, urlparse
 import hashlib
+import os
 import shlex
-
-import numpy as np
-import torch
-import tqdm
-from bs4 import BeautifulSoup
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from werkzeug.urls import url_fix
+import sqlite3
 
 
 def main():
@@ -26,7 +13,7 @@ def main():
 
     con = sqlite3.connect(args.rootdir.rstrip('/') + '.db')
 
-    cur = con.execute('SELECT DISTINCT url FROM privacy_policy_link WHERE url IS NOT NULL')
+    cur = con.execute('SELECT DISTINCT normalized_url FROM privacy_policy_link_normalized')
     all_urls = set(d for d, in cur)
 
     con.close()

@@ -66,7 +66,7 @@ def main():
     )
     ''')
 
-    cur = con.execute('SELECT DISTINCT url FROM privacy_policy_link WHERE url IS NOT NULL')
+    cur = con.execute('SELECT DISTINCT normalized_url FROM privacy_policy_link_normalized')
     url_list = [url for url, in cur]
 
     for url in tqdm.tqdm(url_list):
