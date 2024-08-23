@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import sqlite3
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import tqdm
-from langutil import check_html_language
+
+sys.path.insert(0, os.path.join(sys.path[0], '..', 'pylib'))
+from langutil import check_html_language  # pylint: disable=wrong-import-position
 
 
 def worker(jobdir):
