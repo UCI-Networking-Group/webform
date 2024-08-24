@@ -1,6 +1,5 @@
 from bs4 import BeautifulSoup
-from lingua import LanguageDetectorBuilder
-
+from lingua import LanguageDetectorBuilder  # pylint: disable=no-name-in-module
 
 ISO_639_SET_1 = frozenset([
     # From: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes

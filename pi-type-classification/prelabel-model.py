@@ -2,7 +2,11 @@
 
 import argparse
 import json
+import warnings
 
+warnings.filterwarnings('ignore', module='transformers.utils')
+
+# pylint: disable=wrong-import-position
 import tqdm
 from more_itertools import chunked
 from setfit import SetFitModel
@@ -17,7 +21,7 @@ def main():
     parser.add_argument("output", help="Output dataset path")
     args = parser.parse_args()
 
-    model = SetFitModel.from_pretrained(args.model_dir)
+    model = SetFitModel.from_pretrained(args.model_dir)  # pylint: disable=not-callable
 
     with (open(args.input, encoding='utf-8') as fin,
           open(args.output, "w", encoding='utf-8') as fout):

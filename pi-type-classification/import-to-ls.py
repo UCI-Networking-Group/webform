@@ -2,12 +2,8 @@
 
 import argparse
 import json
-import random
-import tempfile
-from itertools import chain
-from zipfile import ZipFile
-import tqdm
 
+import tqdm
 from label_studio_sdk import Client
 from more_itertools import chunked
 

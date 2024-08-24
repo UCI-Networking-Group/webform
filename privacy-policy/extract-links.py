@@ -60,7 +60,7 @@ def cpu_worker(args: tuple[mp.Queue, Path, str], match_threshold=0.75):
         core_domain = tldextract.extract(page_url).domain
 
         # Collect unique pairs of (text, url)
-        unique_hrefs = set()
+        _unique_hrefs = set()
 
         for a_elem in soup.find_all('a', {"href": True}):
             text = a_elem.get_text().strip()
@@ -72,12 +72,12 @@ def cpu_worker(args: tuple[mp.Queue, Path, str], match_threshold=0.75):
                 continue
 
             if full_url.scheme in ('http', 'https'):
-                unique_hrefs.add((text, full_url.href))
+                _unique_hrefs.add((text, full_url.href))
 
-        if not unique_hrefs:
+        if not _unique_hrefs:
             return None
 
-        unique_hrefs = sorted(unique_hrefs)
+        unique_hrefs = sorted(_unique_hrefs)
 
         features = []
         scores = np.zeros(len(unique_hrefs))
@@ -156,7 +156,7 @@ def cpu_worker(args: tuple[mp.Queue, Path, str], match_threshold=0.75):
     return _check()
 
 
-def gpu_worker(gpu_queue: mp.Queue, worker_index: int, model: str):
+def gpu_worker(gpu_queue: mp.Queue, worker_index: int, model_name: str):
     warnings.filterwarnings('ignore', module='transformers.utils')
 
     # Disable parallelism in ML libraries
@@ -173,9 +173,9 @@ def gpu_worker(gpu_queue: mp.Queue, worker_index: int, model: str):
 
     gpu_count = torch.cuda.device_count()
 
-    model = SentenceTransformer(model, device=f'cuda:{worker_index % gpu_count}')
+    model = SentenceTransformer(model_name, device=f'cuda:{worker_index % gpu_count}')
     seed_embeddings = model.encode(SEED_PHRASES)
-    memory = {}
+    memory: dict[str, float] = {}
 
     while task_tuple := gpu_queue.get():
         batch = [task_tuple]
@@ -224,7 +224,7 @@ def main():
         UNIQUE(job_hash, form_filename)
     ) STRICT''')
 
-    cur = con.execute("SELECT DISTINCT domain FROM page_language")
+    cur = con.execute("SELECT DISTINCT domain FROM form_classification")
     all_domains = sorted({d for d, in cur})
     n_domain = len(all_domains)
 

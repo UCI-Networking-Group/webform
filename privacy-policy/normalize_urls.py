@@ -57,9 +57,8 @@ def main():
 
     con.execute('DROP TABLE IF EXISTS privacy_policy_link_normalized')
     con.execute('''CREATE TABLE privacy_policy_link_normalized (
-        url TEXT,
-        normalized_url TEXT,
-        UNIQUE(url)
+        url TEXT UNIQUE NOT NULL,
+        normalized_url TEXT NOT NULL
     ) STRICT''')
     con.executemany('INSERT INTO privacy_policy_link_normalized VALUES (?, ?)', norm_map.items())
     con.commit()

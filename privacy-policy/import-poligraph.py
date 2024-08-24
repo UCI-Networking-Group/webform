@@ -5,13 +5,10 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections import defaultdict
 
-import networkx as nx
 import tqdm
-import yaml
-
 from poligrapher.graph_utils import KGraph
-
 
 POLIGRAPH_DATA_MAPPING = {
     'email address': 'EmailAddress',
@@ -66,15 +63,29 @@ def main():
     )
     ''')
 
-    cur = con.execute('SELECT DISTINCT normalized_url FROM privacy_policy_link_normalized')
-    url_list = [url for url, in cur]
+    cur = con.execute('''
+        SELECT domain, normalized_url
+        FROM privacy_policy_link
+        LEFT JOIN privacy_policy_link_normalized USING (url)
+        WHERE url IS NOT NULL
+    ''')
 
-    for url in tqdm.tqdm(url_list):
+    url_to_domains = defaultdict(set)
+
+    for domain, url in cur:
+        url_to_domains[url].add(domain)
+
+    domains_with_pp = set()
+    domains_with_disclosures = set()
+
+    for url in tqdm.tqdm(sorted(url_to_domains.keys())):
         url_black2s = hashlib.blake2s(url.encode()).hexdigest()
         pp_dir = os.path.join(args.privacy_policy_dir, url_black2s)
 
         if not os.path.exists(pp_dir):
             continue
+
+        domains_with_pp.update(url_to_domains[url])
 
         graph = KGraph(os.path.join(pp_dir, 'graph-extended.full.yml'))
 
@@ -93,9 +104,15 @@ def main():
         if len(disclosures) == 0:
             continue
 
+        domains_with_disclosures.update(url_to_domains[url])
+
         con.execute('INSERT INTO privacy_policy_disclosures VALUES (?, json(?))',
-                    (url, json.dumps({k: list(v) for k, v in disclosures.items()}, sort_keys=True, indent=2)))
+                    (url, json.dumps({k: list(v) for k, v in disclosures.items()}, sort_keys=True)))
         con.commit()
+
+    print("Domains with privacy policies downloaded:", len(domains_with_pp))
+    print("Domains with disclosures:", len(domains_with_disclosures))
+
 
 if __name__ == '__main__':
     main()

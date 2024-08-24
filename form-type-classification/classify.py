@@ -3,8 +3,12 @@ import json
 import os
 import re
 import sqlite3
+import warnings
 from contextlib import nullcontext
 
+warnings.filterwarnings('ignore', module='transformers.utils')
+
+# pylint: disable=wrong-import-position
 import torch
 import tqdm
 from datasets import Dataset

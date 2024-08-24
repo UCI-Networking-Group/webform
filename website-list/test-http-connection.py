@@ -1,7 +1,9 @@
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+import os
 import socket
 import sqlite3
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 import requests
@@ -9,7 +11,8 @@ import tldextract
 import tqdm
 import urllib3
 
-from langutil import check_html_language
+sys.path.insert(0, os.path.join(sys.path[0], '..', 'pylib'))
+from langutil import check_html_language  # pylint: disable=wrong-import-position
 
 
 def test_domain(domain):

@@ -1,0 +1,15 @@
+[tool.pylint.main]
+expected-line-ending-format = "LF"
+max-line-length = 120
+module-naming-style = "any"
+disable = [
+    "missing-module-docstring", "missing-function-docstring", "missing-class-docstring",
+    "too-many-locals", "missing-timeout"
+]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.mypy]
+ignore_missing_imports = true

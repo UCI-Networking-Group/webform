@@ -94,13 +94,9 @@ def main():
     print(label_counter)
     train_dataset = Dataset.from_dict(dataset)
 
+    # pylint: disable=not-callable
     model = SetFitModel.from_pretrained(
         "BAAI/bge-small-en-v1.5",
-        #"allenai/longformer-base-4096",
-        #"google/bigbird-roberta-base",
-        #"andersonbcdefg/bge-small-4096",
-        #"sentence-transformers/all-distilroberta-v1",
-        #multi_target_strategy="one-vs-rest",
         multi_target_strategy="multi-output",
         labels=LABELS,
     )
