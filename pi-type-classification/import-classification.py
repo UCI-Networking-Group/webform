@@ -9,12 +9,10 @@ from pathlib import Path
 import tqdm
 from field_string import process_form
 
-_classification_map = {}
+_classification_map: dict[str, str] = {}
 
 
 def worker(rootdir, job_descriptor):
-    global _classification_map
-
     domain, job_hash = job_descriptor
     jobdir = rootdir / domain / job_hash
     rows = []

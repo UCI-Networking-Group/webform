@@ -3,23 +3,17 @@
 import argparse
 import json
 import os
+import random
+import sqlite3
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import tiktoken
-from htmlutil import cleanup_html
 from openai import BadRequestError, OpenAI
 
-ID_NAMES = {
-    'Address',
-    'EmailAddress',
-    'GovernmentId',
-    'PaymentCardInfo',
-    'PersonName',
-    'PhoneNumber',
-    'UsernameOrOtherId',
-    'TaxId',
-}
+sys.path.insert(0, os.path.join(sys.path[0], '..', 'pylib'))
+from htmlutil import cleanup_html  # pylint: disable=wrong-import-position
 
 PROMPT_TEMPLATE = '''
 I will provide the HTML code of a web form. Please analyze the form and identify the types of personal data that are being requested in the form fields.
@@ -57,91 +51,114 @@ Here is the HTML code of the form:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("labeled_jsonl_path", help="Path to labeled JSONL file")
     parser.add_argument("root_dir", help="Root directory of the dataset")
     parser.add_argument("output", help="Output path")
-    parser.add_argument("--dry-run", action="store_true", help="Dry run")
+    parser.add_argument("--target", type=int, default=4000,
+                        help="How many forms to label")
+    parser.add_argument("--min_samples_per_category", type=int, default=40,
+                        help="Minimum number of samples per category")
+    parser.add_argument("--model", default="gpt-4-0125-preview",
+                        help="OpenAI model name")
     args = parser.parse_args()
 
     root_dir = Path(args.root_dir)
-    unique_forms = set()
 
-    with open(args.labeled_jsonl_path, encoding='utf-8') as fin:
-        for line in fin:
-            row = json.loads(line)
+    con = sqlite3.connect(args.root_dir.rstrip('/') + '.db')
 
-            if not ID_NAMES.isdisjoint(row["label"]):
-                unique_forms.add((row["domain"], row["job_hash"], row["filename"]))
+    cur = con.execute('SELECT domain, content_categories FROM domain_info')
 
-    unique_form_html = set()
-    tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo-1106")
+    cat_domain_map = defaultdict(list)
 
-    client = OpenAI() if not args.dry_run else None
+    for domain, content_categories_json in cur:
+        content_categories = json.loads(content_categories_json)
 
-    if os.path.exists(args.output):
-        with open(args.output, "r", encoding='utf-8') as fin:
-            for line in fin:
-                row = json.loads(line)
-                unique_forms.remove((row["domain"], row["job_hash"], row["filename"]))
+        for cat in content_categories:
+            if "super_category_id" in cat:
+                cat_domain_map[cat["name"]].append(domain)
 
+    for cat in list(cat_domain_map.keys()):
+        if len(cat_domain_map[cat]) <= args.min_samples_per_category:
+            cat_domain_map['Other'].extend(cat_domain_map[cat])
+            del cat_domain_map[cat]
+
+    candidate_forms = {}
+    tokenizer = tiktoken.encoding_for_model(args.model)
+    client = OpenAI()
+
+    while len(candidate_forms) < args.target:
+        cat = random.choice(list(cat_domain_map.keys()))
+        domain = random.choice(cat_domain_map[cat])
+
+        job_dir = random.choice(list((root_dir / domain).iterdir()))
+
+        try:
+            form_file = random.choice(list(job_dir.glob("form-*.json")))
+        except IndexError:
+            continue
+
+        form_info = json.loads(form_file.read_text())
+
+        try:
+            form_method = form_info['element']['attributes'].get('method')
+            form_html_raw = form_info['element']['outerHTML']
+        except AttributeError:
+            continue
+
+        # Some heuristics to increase the chance of discovering personal data
+
+        # POST forms more likely to require personal data
+        if form_method != 'POST':
+            continue
+
+        # Visible forms only
+        if not form_info['element']['isVisible']:
+            continue
+
+        # With at least two fields
+        if len(form_info['fields']) <= 1:
+            continue
+
+        form_html, _ = cleanup_html(form_html_raw, tokenizer)
+
+        candidate_forms[form_html] = (domain, job_dir.name, form_file.name)
+        print(domain, job_dir.name, form_file.name)
+
+    # Append mode, so previous results are preserved
     with open(args.output, "a", encoding='utf-8') as fout:
-        for domain, job_hash, filename in sorted(unique_forms):
-            form_json_path = root_dir / domain / job_hash / filename
-
-            with form_json_path.open(encoding='utf-8') as fin:
-                form_info = json.load(fin)
+        for form_html, (domain, job_hash, form_file) in candidate_forms.items():
+            prompt = PROMPT_TEMPLATE % form_html
 
             try:
-                form_method = form_info['element']['attributes'].get('method')
-            except AttributeError:
+                response_obj = client.chat.completions.create(
+                    model=args.model,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+            except BadRequestError:
+                print("Bad request!", file=sys.stderr)
                 continue
-            else:
-                if form_method != 'POST':
-                    continue
 
-            form_html_raw = form_info['element']['outerHTML']
-            form_html, n_tokens = cleanup_html(form_html_raw, tokenizer)
+            response = json.loads(response_obj.choices[0].message.content)
 
-            if form_html not in unique_form_html:
-                unique_form_html.add(form_html)
-                print(domain, job_hash, filename, n_tokens)
+            if isinstance(response, dict) and len(response) == 1:
+                response = next(iter(response.values()))
 
-                if not args.dry_run:
-                    prompt = PROMPT_TEMPLATE % form_html
+            if not isinstance(response, list):
+                print("Invalid response:", response, file=sys.stderr)
 
-                    try:
-                        response_obj = client.chat.completions.create(
-                            model="gpt-3.5-turbo-1106",
-                            response_format={"type": "json_object"},
-                            messages=[
-                                {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
-                                {"role": "user", "content": prompt}
-                            ]
-                        )
-                    except BadRequestError:
-                        print("Bad request!", file=sys.stderr)
-                        continue
+            jsonl_line = json.dumps({
+                "domain": domain,
+                "job_hash": job_hash,
+                "filename": form_file,
+                "response": response,
+            })
 
-                    response = json.loads(response_obj.choices[0].message.content)
-
-                    if isinstance(response, dict) and len(response) == 1:
-                        response = next(iter(response.values()))
-
-                    if isinstance(response, str):
-                        response = [response]
-
-                    if not isinstance(response, list):
-                        print("Invalid response:", response, file=sys.stderr)
-
-                    jsonl_line = json.dumps({
-                        "domain": domain,
-                        "job_hash": job_hash,
-                        "filename": filename,
-                        "response": response,
-                    })
-
-                    print(jsonl_line, file=fout)
-                    fout.flush()
+            print(response)
+            print(jsonl_line, file=fout)
+            fout.flush()
 
 
 if __name__ == '__main__':

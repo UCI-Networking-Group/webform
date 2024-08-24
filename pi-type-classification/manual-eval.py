@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
-import random
-from itertools import chain
 
 import numpy as np
-from sklearn.metrics import classification_report
 from label_studio_sdk import Client
-import tqdm
-from more_itertools import chunked, one
+from more_itertools import chunked
 from setfit import SetFitModel
+from sklearn.metrics import classification_report
 
 
 def main():
@@ -23,7 +19,7 @@ def main():
     parser.add_argument("-P", "--api-key", required=True, help="Password")
     args = parser.parse_args()
 
-    model = SetFitModel.from_pretrained(args.model_dir)
+    model = SetFitModel.from_pretrained(args.model_dir)  # pylint: disable=not-callable
 
     ls = Client(url=args.url, api_key=args.api_key)
     project = ls.get_project(args.project_id)
@@ -56,8 +52,8 @@ def main():
             onehot_gt = [int(s in labels_mapping[text]) for s in model.labels]
             y_pred.append(row.numpy())
             y_gt.append(onehot_gt)
-            if sum(row) == 0:
-                print(text)
+            # if sum(row) == 0:
+            #     print(text)
 
     selected_labels = [
         "Address",
