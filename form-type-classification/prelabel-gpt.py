@@ -5,16 +5,20 @@ import hashlib
 import html
 import json
 import logging
+import os
 import re
 import sqlite3
+import sys
 from collections import Counter
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import tiktoken
-from htmlutil import cleanup_html
 from openai import OpenAI
+
+sys.path.insert(0, os.path.join(sys.path[0], '..', 'pylib'))
+from htmlutil import cleanup_html  # pylint: disable=wrong-import-position
 
 PROMPT_TEMPLATE = '''
 Analyze the provided HTML code of a web form, along with the URL and title of the web page to determine the type of the form based on its usage.
@@ -67,10 +71,11 @@ def main():
     parser.add_argument("--n_tries", type=int, default=10, help="Number of GPT calls for each form")
     parser.add_argument("--per-domain-limit", type=int, default=10,
                         help="Maximum number of forms to label for each domain")
+    parser.add_argument("--model", default="gpt-3.5-turbo-0125", help="OpenAI model name")
     args = parser.parse_args()
 
     client = OpenAI()
-    tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo-0125")
+    tokenizer = tiktoken.encoding_for_model(args.model)
     root_dir = Path(args.root_dir)
 
     con = sqlite3.connect(args.root_dir.rstrip('/') + '.db')
@@ -168,8 +173,7 @@ def main():
             continue
 
         full_response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
-            #model="gpt-4-0125-preview",
+            model=args.model,
             response_format={"type": "json_object"},
             seed=args.seed,
             n=args.n_tries,

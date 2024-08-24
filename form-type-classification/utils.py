@@ -1,12 +1,17 @@
 import html
 import json
+import os
+import sys
 from collections import Counter
 from pathlib import Path
 
 import bs4
 from bs4 import BeautifulSoup
 from transformers import MarkupLMFeatureExtractor
-from htmlutil import remove_trivial_elements, remove_long_attributes, cleanup_list_options
+
+sys.path.insert(0, os.path.join(sys.path[0], '..', 'pylib'))
+# pylint: disable=wrong-import-position
+from htmlutil import cleanup_list_options, remove_long_attributes, remove_trivial_elements
 
 
 class MyMarkupLMFeatureExtractor(MarkupLMFeatureExtractor):
