@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-'''Featurize form fields as strings for classification'''
-
 import io
 
 import lxml.html
