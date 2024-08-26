@@ -103,7 +103,6 @@ take a product tour
 try for free
 use phone or email
 `.trim().split('\n');
-console.log(SEED_PHRASES.length);
 
 /**
  * Estimate the reward of clicking an element

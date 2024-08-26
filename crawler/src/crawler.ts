@@ -4,6 +4,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import yargs from 'yargs';
+import { hideBin } from 'yargs/helpers';
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -370,19 +372,60 @@ async function initBrowserContext(cacheDir: string): Promise<BrowserContext> {
   return browserContext;
 }
 
+function parseArguments(): any {
+  const argv = yargs(hideBin(process.argv))
+    .command('$0 <outDir> <landingURLs...>', 'Web form crawler', (_yargs) => {
+      _yargs
+        .positional('outDir', {
+          describe: 'Output directory',
+          type: 'string',
+          demandOption: true,
+        })
+        .positional('landingURLs', {
+          describe: 'Landing URLs',
+          type: 'string',
+          array: true,
+          default: [],
+        });
+    })
+    .option('maxJobCount', {
+      describe: 'Maximum job count',
+      type: 'number',
+      default: 100,
+    })
+    .option('priorityDecayFactor', {
+      describe: 'Priority decay factor',
+      type: 'number',
+      default: 0.90,
+    })
+    .option('priorityRandomizationFactor', {
+      describe: 'Priority randomization factor',
+      type: 'number',
+      default: 0.05,
+    })
+    .option('minJobTime', {
+      describe: 'Minimum job time (in milliseconds)',
+      type: 'number',
+      default: 6000, // 6 seconds
+    })
+    .help('help')
+    .parse();
+
+  return argv;
+}
+
 await (async () => {
   const programName = 'web-form-crawler';
-  const maxJobCount = 100;
-  const priorityDecayFactor = 0.90;
-  const priorityRandomizationFactor = 0.05;
-  const minJobTime = 6000; // 6 seconds
 
   const cacheDir = path.join(xdgCache || os.tmpdir(), programName);
-  const [outDir, ...landingURLs] = process.argv.slice(2);
+
+  const {
+    outDir, landingURLs, maxJobCount, priorityDecayFactor, priorityRandomizationFactor, minJobTime,
+  } = parseArguments();
 
   const jobQueue = new mnemonist.Heap<JobSpec>((j1, j2) => Math.sign(j2.priority - j1.priority));
 
-  landingURLs.forEach((url) => jobQueue.push({
+  landingURLs.forEach((url: string) => jobQueue.push({
     priority: 1000,
     parents: [],
     steps: [{ action: ['goto', url], reward: NaN }],
