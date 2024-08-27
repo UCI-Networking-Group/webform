@@ -171,9 +171,15 @@ def gpu_worker(gpu_queue: mp.Queue, worker_index: int, model_name: str):
 
     torch.set_num_threads(1)
 
-    gpu_count = torch.cuda.device_count()
+    if gpu_count := torch.cuda.device_count():
+        device = f'cuda:{worker_index % gpu_count}'
+    elif torch.backends.mps.is_available():
+        device = 'mps'
+    else:
+        raise RuntimeError("No accelerator available")
 
-    model = SentenceTransformer(model_name, device=f'cuda:{worker_index % gpu_count}')
+    model = SentenceTransformer(model_name, device=device)
+
     seed_embeddings = model.encode(SEED_PHRASES)
     memory: dict[str, float] = {}
 

@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import platform
 import re
 import sqlite3
 import warnings
@@ -71,7 +72,14 @@ def main():
 
         return batch
 
-    model = MarkupLMForSequenceClassification.from_pretrained(args.model_dir, device_map='cuda')
+    if torch.cuda.is_available():
+        device_str = "cuda"
+    elif torch.backends.mps.is_available():
+        device_str = "mps"
+    else:
+        raise RuntimeError("No accelerator available")
+
+    model = MarkupLMForSequenceClassification.from_pretrained(args.model_dir, device_map=device_str)
     model.eval()
 
     dataloader = DataLoader(
@@ -81,6 +89,7 @@ def main():
         pin_memory=True,
         num_workers=args.nproc,
         shuffle=False,
+        multiprocessing_context='fork' if platform.system() == 'Darwin' else None,
     )
 
     con.execute('DROP TABLE IF EXISTS form_classification')
@@ -96,7 +105,7 @@ def main():
     # Main inference loop
     with (tqdm.tqdm(total=len(ds_form), smoothing=0.1) as pbar,
           torch.no_grad(),
-          torch.autocast(device_type="cuda", dtype=torch.bfloat16) if args.bf16 else nullcontext()):
+          torch.autocast(device_type=device_str, dtype=torch.bfloat16) if args.bf16 else nullcontext()):
         ds_idx = 0
 
         for batch in dataloader:
