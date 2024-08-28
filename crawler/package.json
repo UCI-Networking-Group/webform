@@ -8,7 +8,7 @@
     "@xenova/transformers": "^2.12.1",
     "mnemonist": "^0.39.6",
     "parse-domain": "^8.0.1",
-    "playwright": "^1.40.1",
+    "playwright": "^1.41.2",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "rimraf": "^5.0.5",
