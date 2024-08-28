@@ -228,9 +228,10 @@ async function downloadExtensions(cacheDir: string) {
 
   for (const url of extensionUrls) {
     const extractPath = path.join(cacheDir, 'ext-' + btoa(url).replaceAll('/', '@'));
+    const markerPath = path.join(extractPath, '.flag');
     returnPaths.push(extractPath);
 
-    if (await fs.stat(extractPath).then(() => false).catch(() => true)) {
+    if (await fs.stat(markerPath).then(() => false).catch(() => true)) {
       console.log('Downloading extension:', url);
 
       const resource = await fetch(url);
@@ -239,7 +240,9 @@ async function downloadExtensions(cacheDir: string) {
       const downloadPath = path.join(cacheDir, 'ext.crx');
       await fs.writeFile(downloadPath, Buffer.from(data));
 
-      execFileSync('7za', ['x', '-y', downloadPath, '-o' + extractPath]);
+      await fs.mkdir(extractPath, { recursive: true });
+      execFileSync('bsdtar', ['-xf', downloadPath, '-C', extractPath]);
+      await fs.writeFile(markerPath, '');
     }
   }
 
@@ -348,7 +351,7 @@ async function initBrowserContext(cacheDir: string): Promise<BrowserContext> {
       '--disable-extensions-except=' + extensionPaths.join(','),
       '--load-extension=' + extensionPaths.join(','),
     ],
-    chromiumSandbox: true,
+    chromiumSandbox: os.userInfo().uid !== 0,
     // eslint-disable-next-line max-len
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.28 Safari/537.36',
     locale: 'en-US',

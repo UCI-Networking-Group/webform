@@ -54,7 +54,7 @@ dependencies:
   - catalogue=2.0.10=py311h38be061_0
   - cattrs=23.1.2=py311h06a4308_0
   - cchardet=2.1.7=py311h6a678d5_0
-  - certifi=2024.7.4=py311h06a4308_0
+  - certifi=2024.7.4=pyhd8ed1ab_0
   - cffi=1.17.0=py311ha8e6434_0
   - chardet=5.2.0=py311h38be061_1
   - charset-normalizer=3.3.2=pyhd8ed1ab_0
@@ -160,6 +160,7 @@ dependencies:
   - ld_impl_linux-64=2.40=hf3520f5_7
   - lerc=4.0.0=h27087fc_0
   - libabseil=20240116.2=cxx17_he02047a_1
+  - libarchive=3.6.2=h3d51595_0
   - libarrow=16.1.0=h06228bf_5_cpu
   - libarrow-acero=16.1.0=hac33072_5_cpu
   - libarrow-dataset=16.1.0=hac33072_5_cpu
@@ -230,6 +231,7 @@ dependencies:
   - lxml=4.9.3=py311hdbbb534_0
   - lxml-stubs=0.5.1=pyhd8ed1ab_0
   - lz4-c=1.9.4=hcb278e6_0
+  - lzo=2.10=hd590300_1001
   - marisa-trie=1.1.0=py311hb755f60_1
   - markdown-it-py=3.0.0=pyhd8ed1ab_0
   - markupsafe=2.1.5=py311h459d7ec_0
@@ -272,7 +274,7 @@ dependencies:
   - openai=1.12.0=pyhd8ed1ab_0
   - openh264=2.1.1=h780b84a_0
   - openjpeg=2.4.0=hb52868f_1
-  - openssl=3.3.1=h4bc722e_2
+  - openssl=3.3.1=hb9d3cd8_3
   - orc=2.0.1=h17fec99_1
   - orjson=3.10.7=py311hb3a8bbb_0
   - overrides=7.7.0=pyhd8ed1ab_0
