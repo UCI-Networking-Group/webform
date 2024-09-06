@@ -10,14 +10,13 @@ def main():
 
     con = sqlite3.connect(args.database)
     cur = con.execute('''
-    SELECT t.domain, application, content_categories, url
-    FROM tranco_list t
-         JOIN domain_info d ON t.domain = d.domain
-         JOIN http_info h ON t.domain = h.domain
-    WHERE lang IN ('en', 'guess:en', NULL)
-          AND type = 'Apex domain'
-          AND additional_information->'suspected_malware_family' IS NULL
+    SELECT domain, application, content_categories, url
+    FROM tranco_list
+         JOIN domain_info USING (domain)
+         JOIN http_info USING (domain)
+    WHERE lang IN ('en', 'guess:en')
           AND domain_has_changed = 0
+          AND type = 'Apex domain'
     ORDER BY ranking;
     ''')
 
