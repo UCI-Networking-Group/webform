@@ -82,14 +82,14 @@ $ cp -rT model/latest ~/webform-classifiers/pi-type
 
 #### Artifacts
 
-We have released the trained PI type classifier as `classifier-pi-type.tar.xz` in the released artifacts. To extract the classifier:
+We have released the trained PI type classifier as `classifier-pi-type.tar.zst` in the released artifacts. To extract the classifier:
 
 ```console
 $ mkdir -p ~/webform-classifiers/pi-type
-$ tar xf classifier-pi-type.tar.xz -C ~/webform-classifiers/pi-type
+$ tar xf classifier-pi-type.tar.zst -C ~/webform-classifiers/pi-type
 ```
 
-In `extra/label-studio_pi-types-classification.tar.xz`, you can find an export of the annotations from Label Studio, provided primarily for archival purposes.
+In `extra/label-studio_pi-types-classification.tar.zst`, you can find an export of the annotations from Label Studio, provided primarily for archival purposes.
 
 Note that some PI type names in our code and model differ from those used in the paper:
 

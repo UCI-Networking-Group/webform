@@ -26,12 +26,13 @@ We tested the code on a server with the following configuration (reference hardw
 
 For non-machine-learning code, any commodity Linux or Mac computer should suffice. For machine-learning code, we recommend a decent NVIDIA GPU with at least 8 GiB of memory, and CUDA 12.1 support if using our conda environment.
 
-We also ported the code (excluding model training) to macOS. A Mac computer with [MPS](https://developer.apple.com/metal/pytorch/) support can run the code, though we observed a 10x slower model inference performance on the M1 chip compared to the reference hardware.
+We also ported the code (excluding model training) to macOS arm64. A recent Mac computer with [MPS](https://developer.apple.com/metal/pytorch/) support can run the code, though we observed a 10x slower model inference performance on the M1 chip compared to the reference hardware.
 
-Processing our datasets requires a large amount of storage space:
+Processing our full datasets requires a large amount of storage space:
 
-- The raw web form dataset (`crawl-merged-core.tar.xz`) requires 284 GiB of uncompressed space.
-- The privacy policy dataset (`privacy-policies.tar.xz`) requires 4 GiB of uncompressed space.
+- The raw web form dataset (`crawl-merged-core.tar.zst`) requires 287 GiB of uncompressed space.
+- The privacy policy dataset (`privacy-policies.tar.zst`) requires 4 GiB of uncompressed space.
+- The actual disk usage can be higher due to the inefficiency of storing small files in certain filesystems.
 - A fast SSD is highly recommended.
 
 ## Environment Setup
@@ -88,10 +89,10 @@ Detailed usage instructions for each module can be found in the README files wit
 - [Step 5: Form Type Classification](./form-type-classification/README.md)
 - [Step 6: Privacy Policy Processing](./privacy-policy/README.md)
 
-These steps generate a SQLite database (`~/webform-data.db`) that stores all dataset annotation results (i.e., _annotated dataset_ in the paper). You can obtain our version of this file by decompressing `webform-data.db.xz` in the released artifacts:
+These steps generate a SQLite database (`~/webform-data.db`) that stores all dataset annotation results (i.e., _annotated dataset_ in the paper). You can obtain our version of this file by decompressing `webform-data.db.zst` in the released artifacts:
 
 ```console
-$ xz --decompress --keep webform-data.db.xz
+$ zstd -d webform-data.db.zst
 ```
 
 After completing all data processing steps, you can reproduce the main results, including the tables and figures from our paper, using the two Jupyter notebooks in the `analysis/` folder:

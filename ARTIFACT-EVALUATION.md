@@ -84,38 +84,38 @@ git submodule init
 git submodule update
 ```
 
-To populate `~/webform-db`, download `domain.db.xz` and `webform-data.db.xz` from the associated artifacts and decompress them:
+To populate `~/webform-db`, download `domain.db.zst` and `webform-data.db.zst` from the associated artifacts and decompress them:
 
 ```sh
 mkdir ~/webform-db
-xzcat domain.db.xz > ~/webform-db/domain.db
-xzcat webform-data.db.xz > ~/webform-db/webform-data.db
+zstd -d domain.db.zst -o ~/webform-db/domain.db
+zstd -d webform-data.db.zst -o ~/webform-db/webform-data.db
 ```
 
-To populate `~/webform-data`, download `crawl-merged-core.tar.xz`. It contains the full crawled data from 11,500 websites. In the AE experiments, we only use the top 100 websites as shown below:
+To populate `~/webform-data`, download `crawl-merged-core.tar.zst`. It contains the full crawled data from 11,500 websites. In the AE experiments, we only use the top 100 websites as shown below:
 
 ```sh
 mkdir ~/webform-data
 sqlite3 ~/webform-db/webform-data.db 'SELECT domain FROM tranco_list ORDER BY ranking LIMIT 100' > domain_list
-tar xf crawl-merged-core.tar.xz -C webform-data/ -T domain_list
+tar xf crawl-merged-core.tar.zst -C webform-data/ -T domain_list
 ```
 
 The file `domain_list` contains a list of domains to be extracted from the tarball. You may adjust the list or the SQL query to get a different set of domains to evaluate.
 
-To populate `~/webform-classifiers/pi-type` and `~/webform-classifiers/form-type`, download `classifier-pi-type.tar.xz` and `classifier-form-type.tar.xz` and decompress them:
+To populate `~/webform-classifiers/pi-type` and `~/webform-classifiers/form-type`, download `classifier-pi-type.tar.zst` and `classifier-form-type.tar.zst` and decompress them:
 
 ```sh
 mkdir -p ~/webform-classifiers/pi-type
-tar xf classifier-pi-type.tar.xz -C ~/webform-classifiers/pi-type
+tar xf classifier-pi-type.tar.zst -C ~/webform-classifiers/pi-type
 mkdir -p ~/webform-classifiers/form-type
-tar xf classifier-form-type.tar.xz -C ~/webform-classifiers/form-type
+tar xf classifier-form-type.tar.zst -C ~/webform-classifiers/form-type
 ```
 
-To populate `~/webform-privacy-policies`, download `privacy-policies.tar.xz` and decompress it:
+To populate `~/webform-privacy-policies`, download `privacy-policies.tar.zst` and decompress it:
 
 ```sh
 mkdir ~/webform-privacy-policies
-tar xf privacy-policies.tar.xz -C ~/webform-privacy-policies
+tar xf privacy-policies.tar.zst -C ~/webform-privacy-policies
 ```
 
 Then, install [conda](https://conda.io/projects/conda/en/latest/user-guide/install/linux.html) and set up the software environment as follows:
@@ -234,7 +234,7 @@ crawler-test_facebook.com/
 
 Each hex-named subfolder corresponds to a crawl task. The `job.json` file contains metadata for the crawl task (page title, navigation history, etc.), `form-*.json` files store information about web forms, and `page.html` contains the HTML code of the entire web page. See [crawler/README.md](./crawler/README.md) for details.
 
-It is infeasible to reproduce the crawling process. We released our crawls of 11,500 websites as part of the associated artifacts (`crawl-merged-core.tar.xz`). You can verify that subfolders in `~/webform-data` have the same structure.
+It is infeasible to reproduce the crawling process. We released our crawls of 11,500 websites as part of the associated artifacts (`crawl-merged-core.tar.zst`). You can verify that subfolders in `~/webform-data` have the same structure.
 
 **(E1.2 -- Website List and Domain Categorization)** We use scripts under `./website-list` to download the Tranco list and obtain domain categorization data. It is infeasible to reproduce these steps exactly due to the dependency on commercial APIs (see [website-list/README.md](./website-list/README.md) for details). We provide the data in a SQLite3 database (`~/webform-db/domain.db`) in the associated artifacts. You can verify its content as shown below.
 
@@ -262,7 +262,7 @@ microsoft.com http://microsoft.com
 ......
 ```
 
-We built the raw web form dataset (`crawl-merged-core.tar.xz`) by running the crawler over this list.
+We built the raw web form dataset (`crawl-merged-core.tar.zst`) by running the crawler over this list.
 
 #### Experiment 2: Dataset Annotation Pipeline
 

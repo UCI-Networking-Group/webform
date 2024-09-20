@@ -71,8 +71,8 @@ microsoft.com http://microsoft.com
 
 ### Artifacts
 
-In our released artifacts, `domain.db.xz` is a compressed SQLite database containing the results up to this step. You can decompress it to get `domain.db` using the following command:
+In our released artifacts, `domain.db.zst` is a compressed SQLite database containing the results up to this step. You can decompress it to get `domain.db` using the following command:
 
 ```console
-$ xz -d domain.db.xz
+$ zstd -d domain.db.zst
 ```

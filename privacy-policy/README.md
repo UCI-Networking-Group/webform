@@ -99,11 +99,11 @@ https://www.speedtest.net/about/privacy|{"Address":["advertising","services"],"B
 
 ### Artifacts
 
-The processed privacy policy dataset (following Step 6.3) is provided in `privacy-policies.tar.xz` in the released artifacts. To restore the dataset:
+The processed privacy policy dataset (following Step 6.3) is provided in `privacy-policies.tar.zst` in the released artifacts. To restore the dataset:
 
 ```console
 $ mkdir ~/webform-privacy-policies
-$ tar xf privacy-policies.tar.xz -C ~/webform-privacy-policies
+$ tar xf privacy-policies.tar.zst -C ~/webform-privacy-policies
 ```
 
 Our processing results, including the `privacy_policy_link`, `privacy_policy_link_normalized`, and `privacy_policy_disclosures` tables, can be found in the released results database (`webform-data.db`).

@@ -119,11 +119,11 @@ $ cp -rT active-learning/final/best/ ~/webform-classifiers/form-type/
 
 #### Artifacts
 
-We have released `classifier-form-type.tar.xz`, the trained form type classifier. To extract the classifier:
+We have released `classifier-form-type.tar.zst`, the trained form type classifier. To extract the classifier:
 
 ```console
 $ mkdir -p ~/webform-classifiers/form-type/
-$ tar xf classifier-form-type.tar.xz -C ~/webform-classifiers/form-type/
+$ tar xf classifier-form-type.tar.zst -C ~/webform-classifiers/form-type/
 ```
 
 ### Step 5.3: Dataset Annotation
