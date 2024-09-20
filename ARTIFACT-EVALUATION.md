@@ -2,7 +2,7 @@
 
 Paper title: Understanding Privacy Norms through Web Forms
 
-Artifacts HotCRP Id: **#Enter your HotCRP Id here** (not your paper Id, but the artifacts id)
+Artifacts HotCRP Id: 1
 
 Requested Badge: Available, Functional, Reproduced
 
@@ -10,9 +10,13 @@ Requested Badge: Available, Functional, Reproduced
 
 Our artifact submission includes the code, datasets, pre-trained machine learning classifiers, and analysis results associated with our web form measurement study.
 
+For artifact evaluation, we provide steps to reproduce our experiments on a small number of websites (_AE experiments_) so it can be done in a reasonable amount of time. The reviewers can verify that our full results were generated through the same process.
+
+If you would like to run the full experiments, as we did in the paper, please refer to [the main README](./README.md).
+
 ### Security/Privacy Issues and Ethical Concerns (All badges)
 
-**Web Crawling:** The artifacts include web crawler code. Inappropriate use of crawlers (e.g., without rate limits) can harm the reputation of your IP address. We recommend that reviewers test the functionality on a small number of websites only.
+**Web Crawling:** The artifacts include web crawler code. Inappropriate use of crawlers (e.g., without rate limits) can harm the reputation of your IP address. We recommend that reviewers test the functionality on a few websites only.
 
 **Sensitive Content:** We release the raw web form dataset as is. The text files and screenshots in the dataset may contain sensitive content (e.g., adult or fraudulent material) from certain websites. Please keep this in mind if you choose to browse files in the dataset.
 
@@ -20,43 +24,47 @@ Our artifact submission includes the code, datasets, pre-trained machine learnin
 
 ### Hardware Requirements
 
-We tested all the code on a server with the following configuration (reference hardware):
+To run the AE experiments, we recommend using either:
 
-- CPU: Intel Xeon Silver 4316 (2 sockets x 20 cores x 2 threads)
-- Memory: 512 GiB
-- GPU: 2x NVIDIA RTX A5000 (24 GiB of video memory each)
-- Storage: SSD RAID arrays, with TBs of free space
+- a Linux computer that has an NVIDIA GPU with at least 8 GiB of memory and CUDA 12.1 support;
+- or, a recent Mac computer with Apple silicon and [MPS](https://developer.apple.com/metal/pytorch/) support.
 
-Given the significant GPU and storage demands, we will provide reviewers with anonymous SSH access to the reference hardware for artifact evaluation. We will post login details on the HotCRP website.
-
-If you choose to use your own hardware, please refer to [README.md](./README.md) for the minimum system requirements.
+While it is possible to run the experiments without any GPU accelerators, the performance would be significantly lower in certain steps.
 
 ### Software Requirements
 
-We tested all the code in the following software environment:
+We tested all the code in the following software environments:
 
-- OS: Debian GNU/Linux 12 (bookworm)
-- NVIDIA driver: version 545.23.08
-- Conda: version 24.5.0
+- Linux computer:
+  - OS: Debian GNU/Linux 12 (bookworm)
+  - NVIDIA driver: version 545.23.08
+  - Conda: version 24.5.0
+- Mac computer:
+  - OS: macOS 14.6
+  - Conda: version 24.5.0
 
 ### Estimated Time and Storage Consumption
 
-On the reference hardware, the evaluation takes 2-3 hours of runtime. We have implemented progress bars and time estimates for commands that may take a long time.
+On a 2020 MacBook Pro with M1 chip, the AE experiments take about 15 minutes.
 
-If you choose to use your own hardware, please refer to [README.md](./README.md) for storage requirements.
+The scaled-down experiments require about 25 GiB of disk space, including:
+
+- about 5 GiB used to store downloaded associated artifacts;
+- about 10 GiB used for extracted data and any intermediate results generated;
+- about 10 GiB for dependencies installed by conda.
+
+If you would like to run the full experiments, please refer to the main README for details.
 
 ## Environment
 
 ### Accessibility (All badges)
 
-- Codebase: <https://github.com/UCI-Networking-Group/webform/tree/PoPETs-AE-v1>
+- Main codebase: <https://github.com/UCI-Networking-Group/webform/tree/PoPETs-AE-v1>
 - Associated Artifacts: <https://athinagroup.eng.uci.edu/projects/auditing-and-policy-analysis/webform-artifacts/>
 
 ### Setting Up the Environment (Only for Functional and Reproduced badges)
 
-> **To artifact reviewers:** If you use our hardware, we have already set up the environment, including populating the directories described below. Please proceed to "Artifact Evaluation".
-
-We assume the following directory paths in this document:
+We assume the following paths in this document:
 
 - `~/webform-code` -- This repository
 - `~/webform-data` -- Raw web form dataset
@@ -76,12 +84,23 @@ git submodule init
 git submodule update
 ```
 
-To populate `~/webform-data`, download `crawl-merged-core.tar.xz` from the associated artifacts and decompress it (~20 minutes runtime):
+To populate `~/webform-db`, download `domain.db.xz` and `webform-data.db.xz` from the associated artifacts and decompress them:
+
+```sh
+mkdir ~/webform-db
+xzcat domain.db.xz > ~/webform-db/domain.db
+xzcat webform-data.db.xz > ~/webform-db/webform-data.db
+```
+
+To populate `~/webform-data`, download `crawl-merged-core.tar.xz`. It contains the full crawled data from 11,500 websites. In the AE experiments, we only use the top 100 websites as shown below:
 
 ```sh
 mkdir ~/webform-data
-tar xf crawl-merged-core.tar.xz -C ~/webform-data
+sqlite3 ~/webform-db/webform-data.db 'SELECT domain FROM tranco_list ORDER BY ranking LIMIT 100' > domain_list
+tar xf crawl-merged-core.tar.xz -C webform-data/ -T domain_list
 ```
+
+The file `domain_list` contains a list of domains to be extracted from the tarball. You may adjust the list or the SQL query to get a different set of domains to evaluate.
 
 To populate `~/webform-classifiers/pi-type` and `~/webform-classifiers/form-type`, download `classifier-pi-type.tar.xz` and `classifier-form-type.tar.xz` and decompress them:
 
@@ -97,14 +116,6 @@ To populate `~/webform-privacy-policies`, download `privacy-policies.tar.xz` and
 ```sh
 mkdir ~/webform-privacy-policies
 tar xf privacy-policies.tar.xz -C ~/webform-privacy-policies
-```
-
-To populate `~/webform-db`, download `domain.db.xz` and `webform-data.db.xz` and decompress them:
-
-```sh
-mkdir ~/webform-db
-xzcat domain.db.xz > ~/webform-db/domain.db
-xzcat webform-data.db.xz > ~/webform-db/webform-data.db
 ```
 
 Then, install [conda](https://conda.io/projects/conda/en/latest/user-guide/install/linux.html) and set up the software environment as follows:
@@ -123,9 +134,11 @@ npx playwright install
 npx playwright install-deps
 ```
 
+If you use macOS arm64, please use `environment-macos-arm64.yml` to create the conda environment in the second command.
+
 ### Testing the Environment (Only for Functional and Reproduced badges)
 
-Run `env-test.sh` to check if all the necessary library dependencies have been installed (~1 minute runtime):
+Run `env-test.sh` to check if all the necessary library dependencies have been installed:
 
 ```console
 $ bash ~/webform-code/env-test.sh
@@ -186,13 +199,13 @@ cd ~/webform-code
 # Commands to run...
 ```
 
-If you would like to more details about the steps, please refer to [the main README](./README.md) and README files in each folder.
+If you would like more details about each experiment, please refer to [the main README](./README.md) and README files in each subfolder.
 
-#### Experiment 1: Web Form Dataset (Verification Only)
+#### Experiment 1: Web Form Dataset
 
-In this experiment, we illusrate the usage of the web form crawler and how we generated the web form dataset.
+In this experiment, we illustrate the usage of the web form crawler and how we generated the web form dataset.
 
-**(E1.1 -- Web Form Crawler)** To crawl web pages and forms on a website (e.g., `http://facebook.com/`), run (~1 minute runtime):
+**(E1.1 -- Web Form Crawler)** To crawl web pages and forms on a website (e.g., `http://facebook.com/`), run:
 
 ```console
 $ node crawler/build/crawler.js crawler-test_facebook.com/ http://facebook.com/ --maxJobCount 4
@@ -201,7 +214,7 @@ $ node crawler/build/crawler.js crawler-test_facebook.com/ http://facebook.com/ 
 
 Here, `crawler-test_facebook.com/` is the output directory, and `--maxJobCount 4` instructs the crawler to stop after 4 crawl tasks.
 
-The output directory has the following structure (the names of subfolders may vary):
+The output directory has the following structure (the subfolder names may vary):
 
 ```console
 $ tree crawler-test_facebook.com/
@@ -221,24 +234,22 @@ crawler-test_facebook.com/
 
 Each hex-named subfolder corresponds to a crawl task. The `job.json` file contains metadata for the crawl task (page title, navigation history, etc.), `form-*.json` files store information about web forms, and `page.html` contains the HTML code of the entire web page. See [crawler/README.md](./crawler/README.md) for details.
 
-It is infeasible to fully reproduce the crawling process. We released our crawls of 11,500 websites as part of the associated artifacts (`~/webform-data`).
+It is infeasible to reproduce the crawling process. We released our crawls of 11,500 websites as part of the associated artifacts (`crawl-merged-core.tar.xz`). You can verify that subfolders in `~/webform-data` have the same structure.
 
-**(E1.2 -- Website List and Domain Categorization)** We use scripts under `./website-list` to download popular website lists and obtain domain categorization data. It is infeasible to reproduce these steps exactly due to the dependency on commercial APIs (see [website-list/README.md](./website-list/README.md) for details). We provide the data in a SQLite3 database (`~/webform-db/domain.db`) in the associated artifacts. You can verify its content as shown below.
+**(E1.2 -- Website List and Domain Categorization)** We use scripts under `./website-list` to download the Tranco list and obtain domain categorization data. It is infeasible to reproduce these steps exactly due to the dependency on commercial APIs (see [website-list/README.md](./website-list/README.md) for details). We provide the data in a SQLite3 database (`~/webform-db/domain.db`) in the associated artifacts. You can verify its content as shown below.
 
-To get the Tranco rank of a domain (e.g., `chase.com`), which was obtained from [Tranco List version 82NJV](https://tranco-list.eu/list/82NJV/full):
+To get the Tranco rank of a domain (e.g., `forbes.com`), which was obtained from [Tranco List version 82NJV](https://tranco-list.eu/list/82NJV/full):
 
 ```console
-$ sqlite3 -header ~/webform-db/domain.db "SELECT * FROM tranco_list WHERE domain = 'chase.com'"
-ranking|domain
-2565|chase.com
+$ sqlite3 ~/webform-db/domain.db "SELECT domain, ranking FROM tranco_list WHERE domain = 'forbes.com'"
+forbes.com|183
 ```
 
-To get domain categorization information, which should match the information on [Cloudflare Radar](https://radar.cloudflare.com/domains/domain/chase.com):
+To get domain categorization information, which should match the information on [Cloudflare Radar](https://radar.cloudflare.com/domains/domain/forbes.com):
 
 ```console
-$ sqlite3 -header ~/webform-db/domain.db "SELECT * FROM domain_info WHERE domain = 'chase.com'"
-domain|application|content_categories|additional_information|type|notes
-chase.com|{"id":786,"name":"Chase Bank (Do Not Inspect)"}|[{"id":89,"super_category_id":3,"name":"Economy & Finance"},{"id":3,"name":"Business & Economy"}]|{}|Apex domain|Apex domain given.
+$ sqlite3 ~/webform-db/domain.db "SELECT content_categories FROM domain_info WHERE domain = 'forbes.com'"
+[{"id":89,"super_category_id":3,"name":"Economy & Finance"},{"id":3,"name":"Business & Economy"},{"id":116,"super_category_id":7,"name":"Magazines"},{"id":7,"name":"Entertainment"}]
 ```
 
 To get a list of candidate `<domain, URL>` pairs as input arguments for the crawler:
@@ -251,135 +262,150 @@ microsoft.com http://microsoft.com
 ......
 ```
 
-We built the raw web form dataset (`~/webform-data`) by running the crawler over this list.
+We built the raw web form dataset (`crawl-merged-core.tar.xz`) by running the crawler over this list.
 
 #### Experiment 2: Dataset Annotation Pipeline
 
-In this experiment, we repeat the exact web form dataset annotation pipeline in the paper.
+In this experiment, we repeat the exact web form dataset annotation pipeline described in the paper.
 
-**(E2.1 -- Validating the Web Form Dataset)** Run the following command (~3 minutes runtime):
+**(E2.1 -- Validating the Web Form Dataset)** Run the following command:
 
 ```console
 $ python preprocessing/validate.py ~/webform-db/domain.db ~/webform-data
-100%|██████████| 11500/11500 [02:34<00:00, 74.35it/s]
-Total domains: 11500
-Total forms: 938324
+100%|██████████| 100/100 [00:02<00:00, 39.21it/s]
+Total domains: 100
+Total forms: 8095
 ```
 
 This generates `~/webform-data.db`, a SQLite3 database file that will be used by the following steps to store results.
 
-**(E2.2 -- Identifying Web Page Languages)** Run the following command (~15 minutes runtime):
+In the AE experiments, we only use 100 websites. We provide the full version in `~/webform-db/webform-data.db`, which contains results from 11,500 websites.
+
+**(E2.2 -- Identifying Web Page Languages)** Run the following command:
 
 ```console
 $ python preprocessing/check-webpage-language.py ~/webform-data
-100%|██████████| 1149999/1150000 [14:41<00:00, 1304.97it/s]
+100%|██████████| 9999/10000 [00:30<00:00, 326.51it/s]
 ```
 
 See [preprocessing/README.md](./preprocessing/README.md) for more details on E2.1 and E2.2.
 
-**(E2.3 -- PI Type Classification)** Use our pre-trained classifier (`~/webform-classifiers/pi-type`) to identify the PI types collected in each web form. This involves three commands (~50 minutes runtime in total):
+**(E2.3 -- PI Type Classification)** Use our pre-trained classifier (`~/webform-classifiers/pi-type`) to identify the PI types collected in each web form. This involves three commands:
 
 ```console
 $ python pi-type-classification/extract-features.py ~/webform-data pi-unlabeled.jsonl
-100%|██████████| 970644/970644 [04:36<00:00, 3506.68it/s]
+100%|██████████| 8247/8247 [00:04<00:00, 1828.10it/s]
 $ python pi-type-classification/prelabel-model.py pi-unlabeled.jsonl ~/webform-classifiers/pi-type/ pi-labeled.jsonl
-774477it [40:12, 320.98it/s]
+13095it [00:53, 245.64it/s]
 $ python pi-type-classification/import-classification.py -i pi-labeled.jsonl ~/webform-data
-100%|██████████| 970644/970644 [04:37<00:00, 3493.70it/s]
+100%|██████████| 8247/8247 [00:05<00:00, 1417.44it/s]
 ```
 
 The results are saved in the `field_classification` table in `~/webform-data.db`:
 
 ```console
-$ sqlite3 -header ~/webform-data.db 'SELECT * FROM field_classification ORDER BY RANDOM() LIMIT 3'
-domain|job_hash|form_filename|field_list
-primus.ca|24771f1319126c41765064260e83614ae9121b689fc16dd9047a63439f402466|form-0.json|["PhoneNumber", "PhoneNumber", "PostalCode"]
-squarespace.com|52b8a1127937903c9223687b3b9a4a9278ade734d45648e1978ddfab32604321|form-0.json|["EmailAddress", "Password"]
-arin.net|6c135bee885e61ac64e875577425cad9de2119a2f79bc5d659977292d78766d4|form-0.json|["EmailAddress"]
+$ sqlite3 ~/webform-data.db "SELECT * FROM field_classification WHERE domain = 'forbes.com' ORDER BY job_hash, form_filename"
+forbes.com|1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-1.json|["PersonName", "PersonName", "EmailAddress", "PhoneNumber", "Fingerprints"]
+forbes.com|1cb4b7c21334fa904cc36112a0cf6c3e6aa1d4d0b7f49ab586560ed8e5b28122|form-0.json|["EmailAddress"]
+forbes.com|23c287ae6ef19aba1c0260c90bd095a2a288eff6989ff21b37de8f01cafb4226|form-1.json|["EmailAddress"]
+......
 ```
 
 See [pi-type-classification/README.md](./pi-type-classification/README.md) for more details on classifier training and the usage of each script.
 
-**(E2.4 -- Form Type Classification)** Use our pre-trained classifier (`~/webform-classifiers/form-type`) to identify the form types (~40 minutes runtime):
+**(E2.4 -- Form Type Classification)** Use our pre-trained classifier (`~/webform-classifiers/form-type`) to identify the form types:
 
 ```console
 $ python form-type-classification/classify.py ~/webform-classifiers/form-type ~/webform-data
-Generating train split: 292655 examples [00:00, 460072.68 examples/s]
-Map (num_proc=32): 100%|██████████| 292655/292655 [00:47<00:00, 6185.46 examples/s]
-100%|██████████| 292655/292655 [35:46<00:00, 136.33it/s]
+Generating train split: 2465 examples [00:00, 80507.70 examples/s]
+Map (num_proc=16): 100%|██████████| 2465/2465 [00:00<00:00, 4395.48 examples/s]
+100%|██████████| 2465/2465 [04:43<00:00,  8.69it/s]
 ```
 
 The results are saved in the `form_classification` table in `~/webform-data.db`:
 
 ```console
-$ sqlite3 -header ~/webform-data.db 'SELECT * FROM form_classification ORDER BY RANDOM() LIMIT 1'
-domain|job_hash|form_filename|form_type|scores
-tolstoycomments.com|461510895ba486d821dd280b5bfe5999fe2f076f9ee72320b48e167f928b9187|form-0.json|Account Registration Form|...
+$ sqlite3 ~/webform-data.db "SELECT job_hash, form_filename, form_type FROM form_classification WHERE domain = 'forbes.com' ORDER BY job_hash, form_filename"
+1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-1.json|Contact Form
+1cb4b7c21334fa904cc36112a0cf6c3e6aa1d4d0b7f49ab586560ed8e5b28122|form-0.json|Account Login Form
+23c287ae6ef19aba1c0260c90bd095a2a288eff6989ff21b37de8f01cafb4226|form-1.json|Account Login Form
+......
 ```
 
 See [form-type-classification/README.md](./form-type-classification/README.md) for more details on classifier training.
 
 At this point, `~/webform-data.db` is the _annotated web form dataset_ described in the paper.
 
+To confirm reproducibility, verify that `~/webform-db/webform-data.db` has exactly the same results:
+
+```console
+$ sqlite3 ~/webform-db/webform-data.db "SELECT * FROM field_classification WHERE domain = 'forbes.com' ORDER BY job_hash, form_filename"
+forbes.com|1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-1.json|["PersonName", "PersonName", "EmailAddress", "PhoneNumber", "Fingerprints"]
+forbes.com|1cb4b7c21334fa904cc36112a0cf6c3e6aa1d4d0b7f49ab586560ed8e5b28122|form-0.json|["EmailAddress"]
+forbes.com|23c287ae6ef19aba1c0260c90bd095a2a288eff6989ff21b37de8f01cafb4226|form-1.json|["EmailAddress"]
+......
+$ sqlite3 ~/webform-db/webform-data.db "SELECT job_hash, form_filename, form_type FROM form_classification WHERE domain = 'forbes.com' ORDER BY job_hash, form_filename"
+1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-1.json|Contact Form
+1cb4b7c21334fa904cc36112a0cf6c3e6aa1d4d0b7f49ab586560ed8e5b28122|form-0.json|Account Login Form
+23c287ae6ef19aba1c0260c90bd095a2a288eff6989ff21b37de8f01cafb4226|form-1.json|Account Login Form
+......
+```
+
 #### Experiment 3: Web Form Analysis
 
 After completing Experiment 2, use [analysis/web-form-analysis.ipynb](./analysis/web-form-analysis.ipynb), a Jupyter notebook, to generate plots and statistics related to Section 5.
 
-The only input required is the annotated dataset `~/webform-data.db`. If the database is in a different path, please adjust the path in Cell 2 accordingly.
-
-> **To artifact reviewers:** If you are using our machine so far, there are two options to run the notebook. See below.
-
-**(E3a)** To run the notebook directly on our machine, you can enable SSH port forward and start Jupyter Lab on it.
-
-On your local machine, enable SSH port forwarding. If you use OpenSSH client, use the `-L` option when you log in:
-
-```console
-$ ssh -L 8888:localhost:8888 <username>@<hostname>
-```
-
-You can change `8888` to any available port. In the SSH session, start Jupyter Lab with the same port:
-
-```console
-$ conda activate webform
-$ cd ~/webform-code
-# Make a copy of the notebooks to avoid conflicts with other reviewers
-$ cp -r analysis analysis-reviewer1
-$ jupyter lab --no-browser --port=8888 analysis-reviewer1
-```
-
-Then, open the URL printed in the console in your local browser.
-
-**(E3b)** Alternatively, you can copy the notebook and `~/webform-data.db` to your local machine and run it locally. Only a few Python dependencies are required:
-
-```console
-$ pip install scipy pandas seaborn matplotlib matplotlib-inline  # or conda install
-$ jupyter lab
-```
+The AE experiments only used 100 websites, which are not sufficient for analysis. Please change the path in Cell 2 from `~/webform-data.db` to `~/webform-db/webform-data.db` to use the full version of the annotated datasets.
 
 #### Experiment 4: Privacy Policy Analysis
 
-**(E4.1 -- Privacy Policy Link Extraction)** Run the following two scripts to extract privacy policy links from the web form dataset (~25 minutes runtime in total):
+**(E4.1 -- Privacy Policy Link Extraction)** Run the following two scripts to extract privacy policy links from the web form dataset:
 
 ```console
-$ python privacy-policy/extract-links.py ~/webform-data --n_cpu 40 --n_gpu 4
-100%|██████████| 10143/10143 [25:11<00:00,  6.71it/s]
+$ python privacy-policy/extract-links.py ~/webform-data
+100%|██████████| 91/91 [03:08<00:00,  2.07s/it]
 $ python privacy-policy/normalize_urls.py ~/webform-data
 ```
 
-If you use your own machine, please adjust `--n_cpu` (number of parallel CPU workers) and `--n_gpu` (number of GPU workers) according to your available CPU cores and GPU memory size.
+The results are saved in the `privacy_policy_link` and `privacy_policy_link_normalized` tables in `~/webform-data.db`:
+
+```console
+$ sqlite3 ~/webform-data.db "SELECT job_hash, form_filename, scope, normalized_url FROM privacy_policy_link JOIN privacy_policy_link_normalized USING (url) WHERE domain = 'forbes.com' ORDER BY job_hash, form_filename"
+1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-0.json|PAGE|https://councils.forbes.com/privacy-policy
+1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-1.json|FORM|https://councils.forbes.com/privacy-policy
+1cb4b7c21334fa904cc36112a0cf6c3e6aa1d4d0b7f49ab586560ed8e5b28122|form-0.json|PAGE|https://www.forbes.com/fdc/privacy.html
+......
+```
 
 **(E4.2 -- Processing Privacy Policies)** The next step is to download privacy policies and run PoliGraph-er to parse them. Due to the infeasibility of repeating the web crawling process, we provided a processed privacy policy dataset (`~/webform-privacy-policies`) as part of the associated artifacts. Please refer to [privacy-policy/README.md](./privacy-policy/README.md) to understand how these files were generated.
 
-After processing the privacy policies, parse the generated PoliGraphs and import disclosures of collected PI types into the database (~1 minute runtime):
+After processing the privacy policies, parse the generated PoliGraphs and import disclosures of collected PI types into the database:
 
 ```console
 $ python privacy-policy/import-poligraph.py ~/webform-data ~/webform-privacy-policies
-100%|██████████| 19031/19031 [01:16<00:00, 248.24it/s]
-Domains with privacy policies downloaded: 9013
-Domains with disclosures: 7553
+100%|██████████| 227/227 [00:01<00:00, 196.01it/s]
+Domains with privacy policies downloaded: 83
+Domains with disclosures: 76
 ```
 
-**(E4.3 -- Privacy Policy Analysis)** Finally, use [analysis/privacy-policy-analysis.ipynb](./analysis/privacy-policy-analysis.ipynb) to generate tables, plots, and other statistics in Section 6 of our paper. Follow the same instructions as in Experiment 3 to run the Jupyter notebook.
+```console
+$ sqlite3 ~/webform-data.db "SELECT disclosures FROM privacy_policy_disclosures WHERE url = 'https://councils.forbes.com/privacy-policy'"
+{"Address":[],"EmailAddress":[],"PersonName":[],"PhoneNumber":[]}
+```
+
+To confirm reproducibility, verify that `~/webform-db/webform-data.db` has exactly the same results:
+
+```console
+$ sqlite3 ~/webform-db/webform-data.db "SELECT job_hash, form_filename, scope, normalized_url FROM privacy_policy_link JOIN privacy_policy_link_normalized USING (url) WHERE domain = 'forbes.com' ORDER BY job_hash, form_filename"
+1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-0.json|PAGE|https://councils.forbes.com/privacy-policy
+1750265e61ab242b45235c4ab17679f7968a5f489d9c9f0dc978c758c5006dae|form-1.json|FORM|https://councils.forbes.com/privacy-policy
+1cb4b7c21334fa904cc36112a0cf6c3e6aa1d4d0b7f49ab586560ed8e5b28122|form-0.json|PAGE|https://www.forbes.com/fdc/privacy.html
+......
+$ sqlite3 ~/webform-db/webform-data.db "SELECT disclosures FROM privacy_policy_disclosures WHERE url = 'https://councils.forbes.com/privacy-policy'"
+{"Address":[],"EmailAddress":[],"PersonName":[],"PhoneNumber":[]}
+```
+
+**(E4.3 -- Privacy Policy Analysis)** Finally, use [analysis/privacy-policy-analysis.ipynb](./analysis/privacy-policy-analysis.ipynb) to generate tables, plots, and other statistics in Section 6 of our paper. Similar to Experiment 3, please change the path in Cell 2 from `~/webform-data.db` to `~/webform-db/webform-data.db` to use the full dataset.
 
 ## Limitations (Only for Functional and Reproduced badges)
 
