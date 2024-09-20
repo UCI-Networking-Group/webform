@@ -176,7 +176,8 @@ def gpu_worker(gpu_queue: mp.Queue, worker_index: int, model_name: str):
     elif torch.backends.mps.is_available():
         device = 'mps'
     else:
-        raise RuntimeError("No accelerator available")
+        device = "cpu"
+        warnings.warn("No accelerator available", UserWarning)
 
     model = SentenceTransformer(model_name, device=device)
 

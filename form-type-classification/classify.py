@@ -77,7 +77,8 @@ def main():
     elif torch.backends.mps.is_available():
         device_str = "mps"
     else:
-        raise RuntimeError("No accelerator available")
+        device_str = "cpu"
+        warnings.warn("No accelerator available", UserWarning)
 
     model = MarkupLMForSequenceClassification.from_pretrained(args.model_dir, device_map=device_str)
     model.eval()
